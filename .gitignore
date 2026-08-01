@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Training outputs (keep directory via outputs/.gitkeep)
+outputs/**
+!outputs/.gitkeep
+
+# Local data downloads
+data/
