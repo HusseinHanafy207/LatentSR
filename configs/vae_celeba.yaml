@@ -1,7 +1,8 @@
 # 128×128 RGB → latent (4, 32, 32), downsample factor f=4
 
 dataset: CelebA
-data_dir: /content/drive/MyDrive/LatentSR/data/raw
+# Local Colab disk for fast zip extract (~200k JPEGs). Do NOT put this on Drive.
+data_dir: /content/data/raw
 image_size: 128
 in_channels: 3
 
