@@ -1,0 +1,38 @@
+# 128×128 RGB → latent (4, 32, 32), downsample factor f=4
+
+dataset: CelebA
+data_dir: /content/drive/MyDrive/LatentSR/data/raw
+image_size: 128
+in_channels: 3
+
+# Training
+batch_size: 32
+epochs: 50
+learning_rate: 0.0001
+optimizer: Adam
+num_workers: 2
+pin_memory: true
+
+# Model
+latent_channels: 4
+base_channels: 128
+channel_mult: [1, 2, 4]
+num_res_blocks: 2
+dropout: 0.0
+
+# Loss: MSE + kl_weight * KL (mean-reduced; start small)
+kl_weight: 0.0001
+
+# Device
+device: auto
+
+# Saving (Google Drive on Colab)
+checkpoint_dir: /content/drive/MyDrive/LatentSR/outputs/vae/checkpoints
+sample_dir: /content/drive/MyDrive/LatentSR/outputs/vae/samples
+log_dir: /content/drive/MyDrive/LatentSR/outputs/vae/logs
+train_metrics_file: train_metrics.csv
+val_metrics_file: val_metrics.csv
+reconstruct_every: 5
+checkpoint_every: 5
+
+seed: 42

@@ -56,7 +56,20 @@ Smoke check:
 ```bash
 python -c "from generative_models.ddpm import UNet, NoiseScheduler; print('DDPM OK')"
 python -c "import latentsr; print(latentsr.__version__)"
-pytest tests/test_imports.py -q
+pytest tests/ -q
+```
+
+### Train the VAE (Phase 1)
+
+```bash
+# Sanity epoch (downloads CelebA on first run ~1.4GB)
+python scripts/train_vae.py --epochs 1
+
+# Full run
+python scripts/train_vae.py --config configs/vae_celeba.yaml
+
+# Reconstructions / latent interpolations
+python scripts/recon_vae.py --checkpoint outputs/vae/checkpoints/latest.pt --interpolate
 ```
 
 ---
