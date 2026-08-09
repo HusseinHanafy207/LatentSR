@@ -10,6 +10,7 @@ from typing import Any
 import torch
 from torch.utils.data import DataLoader
 from torchvision.utils import make_grid, save_image
+from tqdm.auto import tqdm
 
 from latentsr.utils.config import get_device
 
@@ -89,9 +90,11 @@ class VAETrainer:
         last_batch_loss: float | None = None
 
         context = torch.enable_grad() if training else torch.no_grad()
+        phase = "train" if training else "val"
+        progress = tqdm(loader, desc=phase, leave=False, dynamic_ncols=True)
         with context:
-            for batch in loader:
-                images = _batch_images(batch).to(self.device)
+            for batch in progress:
+                images = _batch_images(batch).to(self.device, non_blocking=True)
 
                 if training:
                     self.optimizer.zero_grad(set_to_none=True)
@@ -114,6 +117,11 @@ class VAETrainer:
                 total_recon_loss += float(recon_loss.item())
                 total_kl_loss += float(kl_loss.item())
                 num_batches += 1
+                progress.set_postfix(
+                    loss=f"{batch_loss:.4f}",
+                    recon=f"{float(recon_loss.item()):.4f}",
+                    kl=f"{float(kl_loss.item()):.4f}",
+                )
 
         metrics = {
             "total_loss": total_loss / num_batches,
@@ -241,6 +249,17 @@ class VAETrainer:
         epochs = int(self.config["epochs"])
         reconstruct_every = int(self.config.get("reconstruct_every", 5))
         checkpoint_every = int(self.config.get("checkpoint_every", 1))
+
+        n_train = len(self.train_loader.dataset)  # type: ignore[arg-type]
+        n_batches = len(self.train_loader)
+        print(f"Device: {self.device}")
+        print(
+            f"Train images: {n_train}  |  batches/epoch: {n_batches}  |  "
+            f"batch_size: {self.train_loader.batch_size}"
+        )
+        if self.val_loader is not None:
+            print(f"Val images: {len(self.val_loader.dataset)}")  # type: ignore[arg-type]
+        print()
 
         for epoch in range(start_epoch + 1, epochs + 1):
             self.current_epoch = epoch
