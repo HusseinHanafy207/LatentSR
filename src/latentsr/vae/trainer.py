@@ -47,6 +47,9 @@ class VAETrainer:
         self.device = get_device(str(config.get("device", "auto")))
         self.model.to(self.device)
 
+        self.use_amp = bool(config.get("amp", False)) and self.device.type == "cuda"
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+
         self.checkpoint_dir = Path(config["checkpoint_dir"])
         self.sample_dir = Path(config["sample_dir"])
         self.log_dir = Path(config["log_dir"])
@@ -99,14 +102,16 @@ class VAETrainer:
                 if training:
                     self.optimizer.zero_grad(set_to_none=True)
 
-                reconstruction, mu, logvar = self.model(images)
-                loss, recon_loss, kl_loss = self.criterion(
-                    reconstruction, images, mu, logvar
-                )
+                with torch.amp.autocast("cuda", enabled=self.use_amp):
+                    reconstruction, mu, logvar = self.model(images)
+                    loss, recon_loss, kl_loss = self.criterion(
+                        reconstruction, images, mu, logvar
+                    )
 
                 if training:
-                    loss.backward()
-                    self.optimizer.step()
+                    self.scaler.scale(loss).backward()
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
 
                 batch_loss = float(loss.item())
                 if first_batch_loss is None:
@@ -117,11 +122,12 @@ class VAETrainer:
                 total_recon_loss += float(recon_loss.item())
                 total_kl_loss += float(kl_loss.item())
                 num_batches += 1
-                progress.set_postfix(
-                    loss=f"{batch_loss:.4f}",
-                    recon=f"{float(recon_loss.item()):.4f}",
-                    kl=f"{float(kl_loss.item()):.4f}",
-                )
+                if num_batches % 10 == 0 or num_batches == 1:
+                    progress.set_postfix(
+                        loss=f"{batch_loss:.4f}",
+                        recon=f"{float(recon_loss.item()):.4f}",
+                        kl=f"{float(kl_loss.item()):.4f}",
+                    )
 
         metrics = {
             "total_loss": total_loss / num_batches,
@@ -252,7 +258,8 @@ class VAETrainer:
 
         n_train = len(self.train_loader.dataset)  # type: ignore[arg-type]
         n_batches = len(self.train_loader)
-        print(f"Device: {self.device}")
+        validate_every = int(self.config.get("validate_every", 1))
+        print(f"Device: {self.device}  |  AMP: {self.use_amp}")
         print(
             f"Train images: {n_train}  |  batches/epoch: {n_batches}  |  "
             f"batch_size: {self.train_loader.batch_size}"
@@ -264,7 +271,10 @@ class VAETrainer:
         for epoch in range(start_epoch + 1, epochs + 1):
             self.current_epoch = epoch
             train_metrics = self.train_epoch()
-            val_metrics = self.validate()
+            run_val = self.val_loader is not None and (
+                epoch == 1 or epoch == epochs or epoch % validate_every == 0
+            )
+            val_metrics = self.validate() if run_val else None
             self._print_metrics(epoch, train_metrics, val_metrics)
             self._log_metrics(epoch, train_metrics, val_metrics)
 

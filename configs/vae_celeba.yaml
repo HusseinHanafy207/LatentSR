@@ -6,17 +6,20 @@ data_dir: /content/data/raw
 image_size: 128
 in_channels: 3
 
-# Training
-batch_size: 32
+# Training (Colab T4-friendly defaults)
+batch_size: 64
 epochs: 50
 learning_rate: 0.0001
 optimizer: Adam
+# Colab free/T4 VMs typically have ~2 CPUs — more workers slows things down
 num_workers: 2
 pin_memory: true
+amp: true
+validate_every: 5
 
-# Model
+# Model (64 base is enough for Phase 1 on T4; raise later if needed)
 latent_channels: 4
-base_channels: 128
+base_channels: 64
 channel_mult: [1, 2, 4]
 num_res_blocks: 2
 dropout: 0.0
