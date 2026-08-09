@@ -37,6 +37,7 @@ log_dir: /content/drive/MyDrive/LatentSR/outputs/vae/logs
 train_metrics_file: train_metrics.csv
 val_metrics_file: val_metrics.csv
 reconstruct_every: 5
+# Numbered snapshots every N epochs; latest.pt is still written every epoch
 checkpoint_every: 5
 
 seed: 42

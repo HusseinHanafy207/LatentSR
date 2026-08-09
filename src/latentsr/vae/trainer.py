@@ -154,7 +154,14 @@ class VAETrainer:
         metrics["epoch_time"] = time.time() - start_time
         return metrics
 
-    def save_checkpoint(self, epoch: int, metrics: dict[str, float]) -> None:
+    def save_checkpoint(
+        self,
+        epoch: int,
+        metrics: dict[str, float],
+        *,
+        save_snapshot: bool = True,
+    ) -> None:
+        """Always refresh ``latest.pt``; optionally write ``checkpoint_epoch_XXX.pt``."""
         checkpoint = {
             "epoch": epoch,
             "model_state_dict": self.model.state_dict(),
@@ -165,10 +172,11 @@ class VAETrainer:
             if hasattr(self.model, "config_dict")
             else {},
         }
-        epoch_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch:03d}.pt"
         latest_path = self.checkpoint_dir / "latest.pt"
-        torch.save(checkpoint, epoch_path)
         torch.save(checkpoint, latest_path)
+        if save_snapshot:
+            epoch_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch:03d}.pt"
+            torch.save(checkpoint, epoch_path)
         if alias := self.config.get("checkpoint_alias"):
             torch.save(checkpoint, self.checkpoint_dir / alias)
 
@@ -278,8 +286,11 @@ class VAETrainer:
             self._print_metrics(epoch, train_metrics, val_metrics)
             self._log_metrics(epoch, train_metrics, val_metrics)
 
-            if epoch == epochs or epoch % checkpoint_every == 0:
-                self.save_checkpoint(epoch, train_metrics)
+            # Always update latest.pt so Colab interrupts don't lose finished epochs.
+            # Numbered snapshots only every checkpoint_every (and final epoch).
+            save_snapshot = epoch == epochs or epoch % checkpoint_every == 0
+            self.save_checkpoint(epoch, train_metrics, save_snapshot=save_snapshot)
+            print(f"Saved latest.pt (epoch {epoch})")
 
             if epoch == 1 or epoch % reconstruct_every == 0 or epoch == epochs:
                 sample_path = self.reconstruct_images()
