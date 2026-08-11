@@ -72,6 +72,16 @@ python scripts/train_vae.py --config configs/vae_celeba.yaml
 python scripts/recon_vae.py --checkpoint outputs/vae/checkpoints/latest.pt --interpolate
 ```
 
+### Frozen VAE (Phase 2)
+
+```bash
+python scripts/verify_frozen_vae.py \
+  --checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt
+```
+
+Later phases must load with ``load_frozen_vae`` and use ``encode_scaled`` /
+``decode_scaled`` (default ``latent_scale=1.0``).
+
 ---
 
 ## Layout
