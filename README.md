@@ -102,6 +102,17 @@ python scripts/train_latent_ddpm.py --config configs/latent_ddpm.yaml --no-downl
 python scripts/train_latent_ddpm.py --resume outputs/latent_ddpm/checkpoints/latest.pt --epochs 50 --no-download
 ```
 
+### Sample LDM (Phase 5)
+
+```bash
+python scripts/sample_ldm.py \
+  --checkpoint /content/drive/MyDrive/LatentSR/outputs/latent_ddpm/checkpoints/latest.pt \
+  --num-samples 16 \
+  --device cuda
+```
+
+Inspect `…/outputs/latent_ddpm/samples/ldm_samples.png` — faces should be recognizable.
+
 ---
 
 ## Layout
