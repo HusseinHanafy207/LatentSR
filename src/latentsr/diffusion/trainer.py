@@ -1,4 +1,13 @@
-"""VAE training loop (CelebA RGB reconstructions)."""
+"""Train unconditional DDPM in VAE latent space (Phase 4).
+
+Each step:
+
+    images → frozen OnTheFlyLatentEncoder → z_scaled
+    noise_pred, noise, t = DDPM(z_scaled)
+    loss = MSE(noise_pred, noise)
+
+Latents are **not** clamped to ``[0, 1]``.
+"""
 
 from __future__ import annotations
 
@@ -9,25 +18,18 @@ from typing import Any
 
 import torch
 from torch.utils.data import DataLoader
-from torchvision.utils import make_grid, save_image
 from tqdm.auto import tqdm
 
+from latentsr.datasets.onthefly_latent import OnTheFlyLatentEncoder, batch_to_images
 from latentsr.utils.amp import autocast_context, make_grad_scaler
 from latentsr.utils.config import get_device
 
 
-def _batch_images(batch: Any) -> torch.Tensor:
-    """Pull the image tensor from a ``(image, …)`` batch or bare tensor."""
-    if isinstance(batch, (list, tuple)):
-        return batch[0]
-    return batch
+class LatentDDPMTrainer:
+    """DDPM trainer that encodes pixels to latents on the fly each step."""
 
-
-class VAETrainer:
-    """Orchestrates VAE training without owning the model, loss, or data."""
-
-    TRAIN_FIELDS = ["epoch", "total_loss", "recon_loss", "kl_loss", "lr", "epoch_time"]
-    VAL_FIELDS = ["epoch", "total_loss", "recon_loss", "kl_loss", "epoch_time"]
+    TRAIN_FIELDS = ["epoch", "loss", "lr", "epoch_time"]
+    VAL_FIELDS = ["epoch", "loss", "epoch_time"]
 
     def __init__(
         self,
@@ -35,6 +37,7 @@ class VAETrainer:
         optimizer: torch.optim.Optimizer,
         criterion: torch.nn.Module,
         train_loader: DataLoader,
+        latent_encoder: OnTheFlyLatentEncoder,
         config: dict[str, Any],
         val_loader: DataLoader | None = None,
     ) -> None:
@@ -43,10 +46,12 @@ class VAETrainer:
         self.criterion = criterion
         self.train_loader = train_loader
         self.val_loader = val_loader
+        self.latent_encoder = latent_encoder
         self.config = config
 
         self.device = get_device(str(config.get("device", "auto")))
         self.model.to(self.device)
+        self.latent_encoder.to(self.device)
 
         self.use_amp = bool(config.get("amp", False)) and self.device.type == "cuda"
         self.scaler = make_grad_scaler(enabled=self.use_amp)
@@ -54,7 +59,6 @@ class VAETrainer:
         self.checkpoint_dir = Path(config["checkpoint_dir"])
         self.sample_dir = Path(config["sample_dir"])
         self.log_dir = Path(config["log_dir"])
-
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.sample_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +76,6 @@ class VAETrainer:
         if not self.train_metrics_path.exists():
             with self.train_metrics_path.open("w", newline="", encoding="utf-8") as file:
                 csv.DictWriter(file, fieldnames=self.TRAIN_FIELDS).writeheader()
-
         if self.val_loader is not None and not self.val_metrics_path.exists():
             with self.val_metrics_path.open("w", newline="", encoding="utf-8") as file:
                 csv.DictWriter(file, fieldnames=self.VAL_FIELDS).writeheader()
@@ -87,8 +90,6 @@ class VAETrainer:
         self.model.train(mode=training)
 
         total_loss = 0.0
-        total_recon_loss = 0.0
-        total_kl_loss = 0.0
         num_batches = 0
         first_batch_loss: float | None = None
         last_batch_loss: float | None = None
@@ -96,18 +97,19 @@ class VAETrainer:
         context = torch.enable_grad() if training else torch.no_grad()
         phase = "train" if training else "val"
         progress = tqdm(loader, desc=phase, leave=False, dynamic_ncols=True)
+
         with context:
             for batch in progress:
-                images = _batch_images(batch).to(self.device, non_blocking=True)
+                images = batch_to_images(batch).to(self.device, non_blocking=True)
+                # Frozen VAE encode (no grad) → scaled latents for DDPM.
+                z = self.latent_encoder(images)
 
                 if training:
                     self.optimizer.zero_grad(set_to_none=True)
 
                 with autocast_context(enabled=self.use_amp, device_type=self.device.type):
-                    reconstruction, mu, logvar = self.model(images)
-                    loss, recon_loss, kl_loss = self.criterion(
-                        reconstruction, images, mu, logvar
-                    )
+                    noise_pred, noise, _t = self.model(z)
+                    loss = self.criterion(noise_pred, noise)
 
                 if training:
                     self.scaler.scale(loss).backward()
@@ -118,41 +120,30 @@ class VAETrainer:
                 if first_batch_loss is None:
                     first_batch_loss = batch_loss
                 last_batch_loss = batch_loss
-
                 total_loss += batch_loss
-                total_recon_loss += float(recon_loss.item())
-                total_kl_loss += float(kl_loss.item())
                 num_batches += 1
                 if num_batches % 10 == 0 or num_batches == 1:
-                    progress.set_postfix(
-                        loss=f"{batch_loss:.4f}",
-                        recon=f"{float(recon_loss.item()):.4f}",
-                        kl=f"{float(kl_loss.item()):.4f}",
-                    )
+                    progress.set_postfix(loss=f"{batch_loss:.4f}")
 
-        metrics = {
-            "total_loss": total_loss / num_batches,
-            "recon_loss": total_recon_loss / num_batches,
-            "kl_loss": total_kl_loss / num_batches,
-        }
+        metrics = {"loss": total_loss / max(num_batches, 1)}
         if training:
             metrics["first_batch_loss"] = first_batch_loss or 0.0
             metrics["last_batch_loss"] = last_batch_loss or 0.0
         return metrics
 
     def train_epoch(self) -> dict[str, float]:
-        start_time = time.time()
+        start = time.time()
         metrics = self._run_epoch(self.train_loader, training=True)
         metrics["lr"] = self.optimizer.param_groups[0]["lr"]
-        metrics["epoch_time"] = time.time() - start_time
+        metrics["epoch_time"] = time.time() - start
         return metrics
 
     def validate(self) -> dict[str, float] | None:
         if self.val_loader is None:
             return None
-        start_time = time.time()
+        start = time.time()
         metrics = self._run_epoch(self.val_loader, training=False)
-        metrics["epoch_time"] = time.time() - start_time
+        metrics["epoch_time"] = time.time() - start
         return metrics
 
     def save_checkpoint(
@@ -162,24 +153,20 @@ class VAETrainer:
         *,
         save_snapshot: bool = True,
     ) -> None:
-        """Always refresh ``latest.pt``; optionally write ``checkpoint_epoch_XXX.pt``."""
         checkpoint = {
             "epoch": epoch,
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "metrics": metrics,
             "config": self.config,
-            "arch": self.model.config_dict()
-            if hasattr(self.model, "config_dict")
-            else {},
+            "vae_checkpoint": self.config.get("vae_checkpoint"),
+            "latent_scale": self.config.get("latent_scale", 1.0),
         }
         latest_path = self.checkpoint_dir / "latest.pt"
         torch.save(checkpoint, latest_path)
         if save_snapshot:
             epoch_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch:03d}.pt"
             torch.save(checkpoint, epoch_path)
-        if alias := self.config.get("checkpoint_alias"):
-            torch.save(checkpoint, self.checkpoint_dir / alias)
 
     def load_checkpoint(self, checkpoint_path: str | Path) -> dict[str, Any]:
         checkpoint = torch.load(
@@ -190,40 +177,17 @@ class VAETrainer:
         self.current_epoch = int(checkpoint["epoch"])
         return checkpoint
 
-    def reconstruct_images(self, num_images: int = 8) -> Path:
-        self.model.eval()
-        batch = next(iter(self.val_loader or self.train_loader))
-        images = _batch_images(batch)[:num_images].to(self.device)
-
-        with torch.no_grad():
-            if hasattr(self.model, "reconstruct"):
-                reconstruction = self.model.reconstruct(images, use_mean=True)
-            else:
-                reconstruction, _, _ = self.model(images)
-
-        comparison = torch.cat([images.cpu(), reconstruction.cpu()], dim=0)
-        grid = make_grid(comparison, nrow=num_images, padding=2)
-
-        output_path = self.sample_dir / f"reconstruction_epoch_{self.current_epoch:03d}.png"
-        save_image(grid, output_path)
-        return output_path
-
     def _print_metrics(
         self,
         epoch: int,
         train_metrics: dict[str, float],
         val_metrics: dict[str, float] | None,
     ) -> None:
-        epochs = self.config["epochs"]
-        print(f"Epoch [{epoch}/{epochs}]")
-        print(f"Train Loss:  {train_metrics['total_loss']:.6f}")
-        print(f"Recon Loss:  {train_metrics['recon_loss']:.6f}")
-        print(f"KL Loss:     {train_metrics['kl_loss']:.6f}")
+        print(f"Epoch [{epoch}/{self.config['epochs']}]")
+        print(f"Train Loss:  {train_metrics['loss']:.6f}")
         print(f"Time:        {train_metrics['epoch_time']:.1f} sec")
         if val_metrics is not None:
-            print(f"Val Loss:    {val_metrics['total_loss']:.6f}")
-            print(f"Val Recon:   {val_metrics['recon_loss']:.6f}")
-            print(f"Val KL:      {val_metrics['kl_loss']:.6f}")
+            print(f"Val Loss:    {val_metrics['loss']:.6f}")
 
     def _log_metrics(
         self,
@@ -236,9 +200,7 @@ class VAETrainer:
             self.TRAIN_FIELDS,
             {
                 "epoch": epoch,
-                "total_loss": f"{train_metrics['total_loss']:.8f}",
-                "recon_loss": f"{train_metrics['recon_loss']:.8f}",
-                "kl_loss": f"{train_metrics['kl_loss']:.8f}",
+                "loss": f"{train_metrics['loss']:.8f}",
                 "lr": f"{train_metrics['lr']:.8f}",
                 "epoch_time": f"{train_metrics['epoch_time']:.2f}",
             },
@@ -249,32 +211,30 @@ class VAETrainer:
                 self.VAL_FIELDS,
                 {
                     "epoch": epoch,
-                    "total_loss": f"{val_metrics['total_loss']:.8f}",
-                    "recon_loss": f"{val_metrics['recon_loss']:.8f}",
-                    "kl_loss": f"{val_metrics['kl_loss']:.8f}",
+                    "loss": f"{val_metrics['loss']:.8f}",
                     "epoch_time": f"{val_metrics['epoch_time']:.2f}",
                 },
             )
 
     def train(self) -> None:
         if seed := self.config.get("seed"):
-            torch.manual_seed(seed)
+            torch.manual_seed(int(seed))
 
         start_epoch = int(self.config.get("start_epoch", 0))
         epochs = int(self.config["epochs"])
-        reconstruct_every = int(self.config.get("reconstruct_every", 5))
-        checkpoint_every = int(self.config.get("checkpoint_every", 1))
+        checkpoint_every = int(self.config.get("checkpoint_every", 5))
+        validate_every = int(self.config.get("validate_every", 5))
 
         n_train = len(self.train_loader.dataset)  # type: ignore[arg-type]
-        n_batches = len(self.train_loader)
-        validate_every = int(self.config.get("validate_every", 1))
         print(f"Device: {self.device}  |  AMP: {self.use_amp}")
         print(
-            f"Train images: {n_train}  |  batches/epoch: {n_batches}  |  "
+            f"Train images: {n_train}  |  batches/epoch: {len(self.train_loader)}  |  "
             f"batch_size: {self.train_loader.batch_size}"
         )
-        if self.val_loader is not None:
-            print(f"Val images: {len(self.val_loader.dataset)}")  # type: ignore[arg-type]
+        print(
+            f"VAE: {self.config.get('vae_checkpoint')}  |  "
+            f"latent_scale: {self.config.get('latent_scale', 1.0)}"
+        )
         print()
 
         for epoch in range(start_epoch + 1, epochs + 1):
@@ -287,13 +247,7 @@ class VAETrainer:
             self._print_metrics(epoch, train_metrics, val_metrics)
             self._log_metrics(epoch, train_metrics, val_metrics)
 
-            # Always update latest.pt so Colab interrupts don't lose finished epochs.
-            # Numbered snapshots only every checkpoint_every (and final epoch).
             save_snapshot = epoch == epochs or epoch % checkpoint_every == 0
             self.save_checkpoint(epoch, train_metrics, save_snapshot=save_snapshot)
             print(f"Saved latest.pt (epoch {epoch})")
-
-            if epoch == 1 or epoch % reconstruct_every == 0 or epoch == epochs:
-                sample_path = self.reconstruct_images()
-                print(f"Saved reconstruction grid to {sample_path}")
             print()

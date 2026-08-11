@@ -1,0 +1,47 @@
+# Phase 4 — unconditional DDPM in VAE latent space (4×32×32)
+
+dataset: CelebA
+# Local Colab disk for fast CelebA I/O (do NOT put images on Drive)
+data_dir: /content/data/raw
+image_size: 128
+
+# Frozen VAE (Phase 1/2) — on-the-fly encode each batch
+vae_checkpoint: /content/drive/MyDrive/LatentSR/outputs/vae/checkpoints/checkpoint_epoch_050.pt
+latent_scale: 1.0
+
+# Latent / UNet
+latent_channels: 4
+latent_size: 32
+base_channels: 64
+channel_mult: [1, 2, 4]
+num_res_blocks: 2
+# 32 → 16 → 8
+attention_resolutions: [16, 8]
+dropout: 0.1
+
+# Diffusion schedule (Ho et al., 2020)
+num_timesteps: 1000
+beta_start: 0.0001
+beta_end: 0.02
+
+# Training (T4-friendly)
+batch_size: 64
+epochs: 50
+learning_rate: 0.0002
+optimizer: Adam
+num_workers: 2
+pin_memory: true
+amp: true
+validate_every: 5
+checkpoint_every: 5
+
+device: auto
+
+# Saving on Google Drive
+checkpoint_dir: /content/drive/MyDrive/LatentSR/outputs/latent_ddpm/checkpoints
+sample_dir: /content/drive/MyDrive/LatentSR/outputs/latent_ddpm/samples
+log_dir: /content/drive/MyDrive/LatentSR/outputs/latent_ddpm/logs
+train_metrics_file: train_metrics.csv
+val_metrics_file: val_metrics.csv
+
+seed: 42

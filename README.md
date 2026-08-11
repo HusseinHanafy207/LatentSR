@@ -91,6 +91,17 @@ python scripts/verify_onthefly_latents.py \
   --checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt
 ```
 
+### Latent DDPM (Phase 4)
+
+```bash
+# Sanity epoch
+python scripts/train_latent_ddpm.py --config configs/latent_ddpm.yaml --epochs 1 --no-download
+
+# Full run / resume
+python scripts/train_latent_ddpm.py --config configs/latent_ddpm.yaml --no-download
+python scripts/train_latent_ddpm.py --resume outputs/latent_ddpm/checkpoints/latest.pt --epochs 50 --no-download
+```
+
 ---
 
 ## Layout
