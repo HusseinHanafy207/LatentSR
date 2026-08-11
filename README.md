@@ -82,6 +82,15 @@ python scripts/verify_frozen_vae.py \
 Later phases must load with ``load_frozen_vae`` and use ``encode_scaled`` /
 ``decode_scaled`` (default ``latent_scale=1.0``).
 
+### On-the-fly latents (Phase 3)
+
+No disk cache — encode each batch live:
+
+```bash
+python scripts/verify_onthefly_latents.py \
+  --checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt
+```
+
 ---
 
 ## Layout

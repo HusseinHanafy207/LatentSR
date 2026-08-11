@@ -1,0 +1,21 @@
+# Phase 3 — on-the-fly latent encoding (no disk cache)
+# Used by verify script and as defaults for Phase 4 latent DDPM.
+
+dataset: CelebA
+# Colab: /content/data/raw
+data_dir: data/raw
+image_size: 128
+batch_size: 64
+num_workers: 2
+pin_memory: true
+
+# Frozen VAE from Phase 1
+# Colab: /content/drive/MyDrive/LatentSR/outputs/vae/checkpoints/checkpoint_epoch_050.pt
+vae_checkpoint: outputs/vae/checkpoints/checkpoint_epoch_050.pt
+latent_scale: 1.0
+
+# Expected latent contract (f=4)
+latent_channels: 4
+latent_size: 32
+
+device: auto
