@@ -121,6 +121,14 @@ python scripts/visualize_sr_pairs.py --config configs/sr_pairs.yaml --no-downloa
 
 Grid rows: nearest(LR) | bicubic(LR→HR) | HR.
 
+### SR latent pairs (Phase 7)
+
+```bash
+python scripts/verify_sr_latents.py --config configs/onthefly_sr_latent.yaml --no-download
+```
+
+Rows: HR | decode(z_hr) | decode(z_lr) | bicubic(LR→HR).
+
 ---
 
 ## Layout

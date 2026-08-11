@@ -1,0 +1,22 @@
+# Phase 7 — on-the-fly SR latent pairs (no disk cache)
+
+dataset: CelebA
+data_dir: /content/data/raw
+hr_size: 128
+lr_size: 32
+
+# Frozen VAE
+vae_checkpoint: /content/drive/MyDrive/LatentSR/outputs/vae/checkpoints/checkpoint_epoch_050.pt
+latent_scale: 1.0
+latent_channels: 4
+latent_size: 32
+
+batch_size: 8
+num_workers: 2
+pin_memory: true
+device: auto
+
+# Visualization
+sample_dir: /content/drive/MyDrive/LatentSR/outputs/sr_latents
+
+seed: 42
