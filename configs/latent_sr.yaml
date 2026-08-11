@@ -1,0 +1,49 @@
+# conditional latent DDPM for 4× super-resolution (32 → 128)
+
+dataset: CelebA
+data_dir: /content/data/raw
+hr_size: 128
+lr_size: 32
+
+# Frozen VAE
+vae_checkpoint: /content/drive/MyDrive/LatentSR/outputs/vae/checkpoints/checkpoint_epoch_050.pt
+latent_scale: 1.0
+
+# Latent / conditioned UNet: in = [x_t | z_lr] → 8 channels, out = 4
+latent_channels: 4
+latent_size: 32
+base_channels: 64
+channel_mult: [1, 2, 4]
+num_res_blocks: 2
+attention_resolutions: [16, 8]
+dropout: 0.1
+
+# Diffusion schedule
+num_timesteps: 1000
+beta_start: 0.0001
+beta_end: 0.02
+
+# Training (T4-friendly)
+batch_size: 64
+epochs: 50
+learning_rate: 0.0002
+optimizer: Adam
+num_workers: 2
+pin_memory: true
+amp: true
+validate_every: 5
+checkpoint_every: 5
+# Full 1000-step SR grids are slow; 0 disables during training
+sample_every: 25
+sample_images: 4
+
+device: auto
+
+# Saving on Google Drive
+checkpoint_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr/checkpoints
+sample_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr/samples
+log_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr/logs
+train_metrics_file: train_metrics.csv
+val_metrics_file: val_metrics.csv
+
+seed: 42

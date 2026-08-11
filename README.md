@@ -129,6 +129,18 @@ python scripts/verify_sr_latents.py --config configs/onthefly_sr_latent.yaml --n
 
 Rows: HR | decode(z_hr) | decode(z_lr) | bicubic(LR→HR).
 
+### Conditional Latent SR (Phase 8)
+
+```bash
+!mkdir -p /content/drive/MyDrive/LatentSR/outputs/latent_sr/{checkpoints,samples,logs}
+!python scripts/train_sr.py --config configs/latent_sr.yaml --epochs 1 --device cuda --no-download
+!python scripts/train_sr.py --config configs/latent_sr.yaml --device cuda --no-download
+# Resume:
+!python scripts/train_sr.py --config configs/latent_sr.yaml \
+  --resume /content/drive/MyDrive/LatentSR/outputs/latent_sr/checkpoints/latest.pt \
+  --epochs 50 --device cuda --no-download
+```
+
 ---
 
 ## Layout
