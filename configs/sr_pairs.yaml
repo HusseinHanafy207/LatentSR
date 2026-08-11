@@ -1,0 +1,20 @@
+# Phase 6 — CelebA LR/HR pixel pairs (4× SR: 32 → 128)
+
+dataset: CelebA
+# Colab: /content/data/raw
+data_dir: /content/data/raw
+hr_size: 128
+lr_size: 32
+scale: 4
+
+batch_size: 16
+num_workers: 2
+pin_memory: true
+
+device: auto
+
+# Visualization output
+# Colab: /content/drive/MyDrive/LatentSR/outputs/sr_pairs
+sample_dir: /content/drive/MyDrive/LatentSR/outputs/sr_pairs
+
+seed: 42

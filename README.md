@@ -113,6 +113,14 @@ python scripts/sample_ldm.py \
 
 Inspect `…/outputs/latent_ddpm/samples/ldm_samples.png` — faces should be recognizable.
 
+### SR pixel pairs (Phase 6)
+
+```bash
+python scripts/visualize_sr_pairs.py --config configs/sr_pairs.yaml --no-download
+```
+
+Grid rows: nearest(LR) | bicubic(LR→HR) | HR.
+
 ---
 
 ## Layout
