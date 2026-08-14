@@ -10,6 +10,7 @@ Each step:
 from __future__ import annotations
 
 import csv
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -162,12 +163,76 @@ class LatentSRTrainer:
             "vae_checkpoint": self.config.get("vae_checkpoint"),
             "latent_scale": self.config.get("latent_scale", 1.0),
         }
-        torch.save(checkpoint, self.checkpoint_dir / "latest.pt")
+        latest_path = self.checkpoint_dir / "latest.pt"
+        torch.save(checkpoint, latest_path)
+        size_mb = latest_path.stat().st_size / (1024**2)
+        print(f"Saved {latest_path} ({size_mb:.1f} MB, epoch {epoch})")
+
         if save_snapshot:
-            torch.save(
-                checkpoint,
-                self.checkpoint_dir / f"checkpoint_epoch_{epoch:03d}.pt",
+            snap = self.checkpoint_dir / f"checkpoint_epoch_{epoch:03d}.pt"
+            torch.save(checkpoint, snap)
+            print(f"Saved snapshot {snap.name}")
+
+        # Optional second local copy (e.g. another mounted path). Still wiped on
+        # Kaggle restart unless it points outside /kaggle/working.
+        backup_dir = self.config.get("checkpoint_backup_dir")
+        if backup_dir:
+            backup_dir = Path(backup_dir)
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(latest_path, backup_dir / "latest.pt")
+            if save_snapshot:
+                shutil.copy2(
+                    latest_path, backup_dir / f"checkpoint_epoch_{epoch:03d}.pt"
+                )
+            print(f"Backed up checkpoint to {backup_dir}")
+
+        # Durable off-machine backup (recommended on Kaggle). Set
+        # hf_checkpoint_repo in config and HF_TOKEN in the environment / secrets.
+        hf_repo = self.config.get("hf_checkpoint_repo")
+        if hf_repo:
+            self._upload_hf_checkpoint(latest_path, epoch=epoch, repo_id=str(hf_repo))
+
+    def _upload_hf_checkpoint(
+        self, latest_path: Path, *, epoch: int, repo_id: str
+    ) -> None:
+        try:
+            from huggingface_hub import HfApi
+        except ImportError:
+            print(
+                "hf_checkpoint_repo is set but huggingface_hub is not installed; "
+                "skipping upload (pip install huggingface_hub)."
             )
+            return
+        try:
+            api = HfApi()
+            api.upload_file(
+                path_or_fileobj=str(latest_path),
+                path_in_repo="latest.pt",
+                repo_id=repo_id,
+                repo_type="model",
+            )
+            # Keep a named copy too so you can roll back if needed.
+            api.upload_file(
+                path_or_fileobj=str(latest_path),
+                path_in_repo=f"checkpoint_epoch_{epoch:03d}.pt",
+                repo_id=repo_id,
+                repo_type="model",
+            )
+            # Metrics CSVs (overwrite each epoch; tiny files).
+            for local_path, remote_name in (
+                (self.train_metrics_path, "logs/train_metrics.csv"),
+                (self.val_metrics_path, "logs/val_metrics.csv"),
+            ):
+                if local_path.exists():
+                    api.upload_file(
+                        path_or_fileobj=str(local_path),
+                        path_in_repo=remote_name,
+                        repo_id=repo_id,
+                        repo_type="model",
+                    )
+            print(f"Uploaded checkpoints + logs to hf://{repo_id} (epoch {epoch})")
+        except Exception as exc:  # noqa: BLE001 — never crash training on backup failure
+            print(f"WARNING: Hugging Face checkpoint upload failed: {exc}")
 
     def load_checkpoint(self, checkpoint_path: str | Path) -> dict[str, Any]:
         checkpoint = torch.load(
@@ -284,7 +349,6 @@ class LatentSRTrainer:
 
             save_snapshot = epoch == epochs or epoch % checkpoint_every == 0
             self.save_checkpoint(epoch, train_metrics, save_snapshot=save_snapshot)
-            print(f"Saved latest.pt (epoch {epoch})")
 
             if sample_every > 0 and (
                 epoch == 1 or epoch == epochs or epoch % sample_every == 0

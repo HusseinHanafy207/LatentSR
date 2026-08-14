@@ -32,18 +32,23 @@ num_workers: 2
 pin_memory: true
 amp: true
 validate_every: 5
-checkpoint_every: 5
+# Numbered checkpoint_epoch_XXX.pt cadence. latest.pt is ALWAYS overwritten every epoch.
+checkpoint_every: 1
 # Full 1000-step SR grids are slow; 0 disables during training
 sample_every: 25
 sample_images: 4
 
 device: auto
 
-# Saving on Google Drive
+# Saving on Google Drive (Colab). On Kaggle, /kaggle/working is WIPED on restart —
+# keep checkpoint_dir under working for speed, and set hf_checkpoint_repo so each
+# epoch uploads latest.pt off-machine (needs HF_TOKEN in Kaggle Secrets).
 checkpoint_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr/checkpoints
 sample_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr/samples
 log_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr/logs
 train_metrics_file: train_metrics.csv
 val_metrics_file: val_metrics.csv
+# Durable backup on Kaggle (uploads latest.pt + epoch snapshot + CSVs each epoch):
+# hf_checkpoint_repo: HusseinHamouda/LatentSR-checkpoints
 
 seed: 42
