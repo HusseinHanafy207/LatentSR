@@ -1,0 +1,17 @@
+# Phase 10 — LatentSR vs bicubic evaluation on CelebA val
+
+dataset: CelebA
+data_dir: /kaggle/working/data/raw
+hr_size: 128
+lr_size: 32
+latent_scale: 1.0
+
+# How many val images to score (full 1000-step sampling each — keep modest)
+num_images: 64
+batch_size: 4
+num_workers: 2
+pin_memory: true
+
+output_dir: /kaggle/working/outputs/eval
+device: auto
+seed: 42

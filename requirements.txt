@@ -12,3 +12,6 @@ Pillow>=10.0
 # Repo: https://github.com/HusseinHanafy207/generative-models
 # Then this project:
 #   pip install -e ".[dev]"
+# Optional LPIPS for Phase 10 eval:
+#   pip install -e ".[eval]"
+#   # or: pip install lpips

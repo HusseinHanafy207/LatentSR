@@ -160,6 +160,24 @@ python scripts/super_resolve.py \
 
 Add `--include-soft-decode` to also show `decode(z_lr)` in the comparison grid.
 
+### Evaluate vs bicubic (Phase 10)
+
+```bash
+pip install lpips   # once, for LPIPS
+
+python scripts/evaluate.py \
+  --checkpoint outputs/latent_sr/checkpoints/latest.pt \
+  --vae-checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt \
+  --config configs/eval_sr.yaml \
+  --num-images 64 --no-download
+```
+
+Writes under `output_dir` (default `outputs/eval/`):
+- `metrics.csv` / `metrics.json` — mean±std PSNR, SSIM, LPIPS for **bicubic** vs **LatentSR**
+- `eval_compare.png` — nearest(LR) | bicubic | LatentSR | HR
+
+Use `--no-lpips` if you skip the `lpips` install. Full reverse diffusion per image is slow; start with `--num-images 16`.
+
 ---
 
 ## Layout
