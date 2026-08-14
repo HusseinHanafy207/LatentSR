@@ -141,6 +141,25 @@ Rows: HR | decode(z_hr) | decode(z_lr) | bicubic(LR→HR).
   --epochs 50 --device cuda --no-download
 ```
 
+### SR inference (Phase 9)
+
+```bash
+# CelebA val grid: nearest(LR) | bicubic | LatentSR | HR
+python scripts/super_resolve.py \
+  --checkpoint outputs/latent_sr/checkpoints/latest.pt \
+  --vae-checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt \
+  --config configs/latent_sr.yaml \
+  --from-celeba --num-images 8 --no-download
+
+# Single image / folder (32×32 LR or 128×128 will be downsampled)
+python scripts/super_resolve.py \
+  --checkpoint outputs/latent_sr/checkpoints/latest.pt \
+  --input path/to/face.png \
+  --output outputs/latent_sr/samples/sr_out.png
+```
+
+Add `--include-soft-decode` to also show `decode(z_lr)` in the comparison grid.
+
 ---
 
 ## Layout
