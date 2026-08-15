@@ -34,6 +34,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", type=Path, default=None, help="Full trainer resume.")
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Override config batch_size (use 32 or 16 on T4 if OOM).",
+    )
+    parser.add_argument(
         "--download",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -66,6 +72,8 @@ def main() -> None:
         config["epochs"] = args.epochs
     if args.device is not None:
         config["device"] = args.device
+    if args.batch_size is not None:
+        config["batch_size"] = args.batch_size
     if args.init_from is not None:
         config["init_from"] = str(args.init_from)
     if args.resume is not None and args.init_from is not None:

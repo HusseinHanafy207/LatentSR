@@ -10,6 +10,7 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from torch.utils.data import DataLoader
 from torchvision.utils import make_grid, save_image
 from tqdm.auto import tqdm
@@ -389,7 +390,13 @@ class SRAwareVAETrainer(VAETrainer):
                 with autocast_context(enabled=self.use_amp, device_type=self.device.type):
                     lr_up = _upsample_bicubic(lr, hr_size)
                     reconstruction, mu_hr, logvar_hr = self.model(hr)
-                    mu_lr, _logvar_lr = self.model.encode(lr_up)
+                    # Checkpoint the extra encoder pass so T4 16GB can hold the batch.
+                    if training:
+                        mu_lr, _logvar_lr = checkpoint(
+                            self.model.encode, lr_up, use_reentrant=False
+                        )
+                    else:
+                        mu_lr, _logvar_lr = self.model.encode(lr_up)
                     loss, recon_loss, kl_loss, align_loss = self.criterion(
                         reconstruction, hr, mu_hr, logvar_hr, mu_lr
                     )
