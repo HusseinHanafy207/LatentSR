@@ -11,8 +11,8 @@ from latentsr.vae.latent import (
     is_frozen,
     load_frozen_vae,
 )
-from latentsr.vae.loss import VAELoss
-from latentsr.vae.trainer import VAETrainer
+from latentsr.vae.loss import SRAwareVAELoss, VAELoss
+from latentsr.vae.trainer import SRAwareVAETrainer, VAETrainer
 from latentsr.vae.vae import VAE
 
 __all__ = [
@@ -20,7 +20,9 @@ __all__ = [
     "Encoder",
     "VAE",
     "VAELoss",
+    "SRAwareVAELoss",
     "VAETrainer",
+    "SRAwareVAETrainer",
     "build_vae_from_config",
     "decode_scaled",
     "encode_scaled",

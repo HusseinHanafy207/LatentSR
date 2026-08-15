@@ -1,0 +1,49 @@
+# Q2 — SR-aware VAE: HR recon + λ ||μ_lr - sg(μ_hr)||²
+# Fine-tune VAE-1 so decode(z_hr) stays strong while z_lr moves toward z_hr.
+
+dataset: CelebA
+data_dir: /kaggle/working/data/raw
+hr_size: 128
+lr_size: 32
+image_size: 128
+in_channels: 3
+
+batch_size: 64
+epochs: 20
+learning_rate: 0.0001
+optimizer: Adam
+num_workers: 2
+pin_memory: true
+amp: true
+validate_every: 5
+
+latent_channels: 4
+base_channels: 64
+channel_mult: [1, 2, 4]
+num_res_blocks: 2
+dropout: 0.0
+
+kl_weight: 0.0001
+# Unweighted align MSE starts ~0.58; λ=1e-3 keeps it on the order of recon MSE.
+align_weight: 0.001
+
+# Load VAE-1 weights (override with --init-from)
+init_from: /kaggle/working/artifacts/vae/checkpoint_epoch_050.pt
+
+latent_scale: 1.0
+device: auto
+
+checkpoint_dir: /kaggle/working/outputs/vae_sr/checkpoints
+sample_dir: /kaggle/working/outputs/vae_sr/samples
+log_dir: /kaggle/working/outputs/vae_sr/logs
+train_metrics_file: train_metrics.csv
+val_metrics_file: val_metrics.csv
+reconstruct_every: 5
+# Numbered local snapshots every epoch. HF also gets latest.pt + checkpoint_epoch_XXX.pt every epoch.
+checkpoint_every: 1
+
+# Uploads under vae_sr/ so it does NOT overwrite latent_sr latest.pt
+hf_checkpoint_repo: HusseinHamouda/LatentSR-checkpoints
+hf_checkpoint_subdir: vae_sr
+
+seed: 42

@@ -196,6 +196,19 @@ Writes under `output_dir` (default `outputs/eval_vae/`):
 
 Use `--no-lpips` if you skip the `lpips` install. Compare `decode(z_hr)` to the Phase 10 LatentSR PSNR (~26.25) to decide whether the VAE is the bottleneck.
 
+### SR-aware VAE (research Q2)
+
+Phase A showed `decode(z_hr)` PSNR ~37.3 while LatentSR is ~26.3 and `decode(z_lr)` ≈ bicubic. Fine-tune VAE-1 so `μ_lr` moves toward `sg(μ_hr)` without retraining a new autoencoder from scratch:
+
+```bash
+python scripts/train_vae_sr.py \
+  --config configs/vae_sr_align.yaml \
+  --init-from outputs/vae/checkpoints/checkpoint_epoch_050.pt \
+  --no-download
+```
+
+Then re-run `scripts/evaluate_vae.py` on the new checkpoint. Watch **cosine(z_lr, z_hr)** (baseline ~0.63) and **soft_decode PSNR**; `vae_hr` PSNR should stay high. Hugging Face uploads go under `vae_sr/` so they do not overwrite the LatentSR DDPM `latest.pt`.
+
 ---
 
 ## Layout
