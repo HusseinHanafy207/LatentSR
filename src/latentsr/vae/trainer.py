@@ -14,9 +14,15 @@ from torch.utils.data import DataLoader
 from torchvision.utils import make_grid, save_image
 from tqdm.auto import tqdm
 
-from latentsr.datasets.onthefly_sr_latent import upsample_bicubic
 from latentsr.utils.amp import autocast_context, make_grad_scaler
 from latentsr.utils.config import get_device
+
+
+def _upsample_bicubic(lr: torch.Tensor, hr_size: int) -> torch.Tensor:
+    """Bicubic upsample a batched LR tensor to ``hr_size`` (no datasets import)."""
+    return F.interpolate(
+        lr, size=(hr_size, hr_size), mode="bicubic", align_corners=False
+    ).clamp(0.0, 1.0)
 
 
 def _batch_images(batch: Any) -> torch.Tensor:
@@ -381,7 +387,7 @@ class SRAwareVAETrainer(VAETrainer):
                     self.optimizer.zero_grad(set_to_none=True)
 
                 with autocast_context(enabled=self.use_amp, device_type=self.device.type):
-                    lr_up = upsample_bicubic(lr, hr_size)
+                    lr_up = _upsample_bicubic(lr, hr_size)
                     reconstruction, mu_hr, logvar_hr = self.model(hr)
                     mu_lr, _logvar_lr = self.model.encode(lr_up)
                     loss, recon_loss, kl_loss, align_loss = self.criterion(
@@ -436,7 +442,7 @@ class SRAwareVAETrainer(VAETrainer):
         lr = batch[0][:num_images].to(self.device)
         hr = batch[1][:num_images].to(self.device)
         with torch.no_grad():
-            lr_up = upsample_bicubic(lr, hr_size)
+            lr_up = _upsample_bicubic(lr, hr_size)
             mu_hr, _ = self.model.encode(hr)
             mu_lr, _ = self.model.encode(lr_up)
             vae_hr = self.model.decode(mu_hr)

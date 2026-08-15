@@ -27,3 +27,11 @@ def test_generative_models_ddpm_available() -> None:
     assert hasattr(ddpm, "NoiseScheduler")
     assert hasattr(ddpm, "forward_diffuse")
     assert hasattr(ddpm, "DDPM")
+
+
+def test_train_vae_sr_import_order() -> None:
+    """scripts/train_vae_sr.py imports datasets before the VAE trainer."""
+    sr_pairs = importlib.import_module("latentsr.datasets.sr_pairs")
+    vae_pkg = importlib.import_module("latentsr.vae")
+    assert hasattr(sr_pairs, "get_sr_pair_dataloaders")
+    assert hasattr(vae_pkg, "SRAwareVAETrainer")
