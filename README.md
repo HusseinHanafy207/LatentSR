@@ -178,6 +178,24 @@ Writes under `output_dir` (default `outputs/eval/`):
 
 Use `--no-lpips` if you skip the `lpips` install. Full reverse diffusion per image is slow; start with `--num-images 16`.
 
+### VAE bottleneck (research Phase A)
+
+No diffusion — measures what the frozen VAE already loses:
+
+```bash
+python scripts/evaluate_vae.py \
+  --vae-checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt \
+  --config configs/eval_vae.yaml \
+  --num-images 64 --no-download
+```
+
+Writes under `output_dir` (default `outputs/eval_vae/`):
+- `metrics.csv` / `metrics.json` — PSNR, SSIM, LPIPS, Sobel edge MAE, radial FFT-band error for **bicubic**, **decode(z_lr)**, **decode(z_hr)**
+- `std(μ)` and suggested `latent_scale = 1 / std(μ_HR)`
+- `eval_vae_compare.png` — nearest(LR) | bicubic | decode(z_lr) | decode(z_hr) | HR
+
+Use `--no-lpips` if you skip the `lpips` install. Compare `decode(z_hr)` to the Phase 10 LatentSR PSNR (~26.25) to decide whether the VAE is the bottleneck.
+
 ---
 
 ## Layout

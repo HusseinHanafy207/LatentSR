@@ -1,4 +1,4 @@
-"""Phase 10: PSNR / SSIM / LPIPS helpers."""
+"""PSNR / SSIM / LPIPS helpers."""
 
 from __future__ import annotations
 
@@ -35,6 +35,10 @@ def test_batch_metrics_shapes() -> None:
     metrics = batch_metrics(pred, gt, lpips_fn=None)
     assert metrics["psnr"].shape == (3,)
     assert metrics["ssim"].shape == (3,)
+    assert metrics["edge_mae"].shape == (3,)
+    assert metrics["freq_low"].shape == (3,)
+    assert metrics["freq_mid"].shape == (3,)
+    assert metrics["freq_high"].shape == (3,)
     assert "lpips" not in metrics
 
 

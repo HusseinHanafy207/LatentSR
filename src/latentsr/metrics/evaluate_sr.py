@@ -1,9 +1,7 @@
-"""Run bicubic vs LatentSR metrics on CelebA val pairs (Phase 10)."""
+"""Run bicubic vs LatentSR metrics on CelebA val pairs"""
 
 from __future__ import annotations
 
-import csv
-import json
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -19,6 +17,7 @@ from latentsr.metrics.image_metrics import (
     batch_metrics,
     format_metric_table,
     summarize_values,
+    write_summary_files,
 )
 from latentsr.super_resolution.condition import ConditionalLatentDDPM
 from latentsr.super_resolution.inference import (
@@ -129,36 +128,6 @@ def evaluate_sr(
         save_image(grid_pred, output_dir / "eval_latentsr.png", nrow=4, padding=2)
         save_image(grid_hr, output_dir / "eval_hr.png", nrow=4, padding=2)
         result["grid_path"] = str(grid_path)
-        _write_summary_files(output_dir, summary, result["num_images"])
+        write_summary_files(output_dir, summary, result["num_images"])
 
     return result
-
-
-def _write_summary_files(
-    output_dir: Path,
-    summary: dict[str, dict[str, dict[str, float]]],
-    num_images: int,
-) -> None:
-    payload = {"num_images": num_images, "methods": summary}
-    (output_dir / "metrics.json").write_text(
-        json.dumps(payload, indent=2), encoding="utf-8"
-    )
-
-    rows: list[dict[str, Any]] = []
-    for method, metrics in summary.items():
-        row: dict[str, Any] = {"method": method, "n": num_images}
-        for metric, stats in metrics.items():
-            row[f"{metric}_mean"] = stats["mean"]
-            row[f"{metric}_std"] = stats["std"]
-        rows.append(row)
-
-    fieldnames: list[str] = []
-    for row in rows:
-        for key in row:
-            if key not in fieldnames:
-                fieldnames.append(key)
-    csv_path = output_dir / "metrics.csv"
-    with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)

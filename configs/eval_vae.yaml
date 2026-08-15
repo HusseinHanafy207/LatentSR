@@ -1,0 +1,20 @@
+# Phase A — frozen VAE bottleneck (no diffusion)
+
+dataset: CelebA
+data_dir: data/raw
+hr_size: 128
+lr_size: 32
+latent_scale: 1.0
+
+# Frozen VAE from Phase 1
+vae_checkpoint: outputs/vae/checkpoints/checkpoint_epoch_050.pt
+
+# How many val images to score (VAE forward only — cheap vs 1000-step SR)
+num_images: 64
+batch_size: 8
+num_workers: 2
+pin_memory: true
+
+output_dir: outputs/eval_vae
+device: auto
+seed: 42
