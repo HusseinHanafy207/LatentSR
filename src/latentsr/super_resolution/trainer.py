@@ -186,14 +186,29 @@ class LatentSRTrainer:
                 )
             print(f"Backed up checkpoint to {backup_dir}")
 
-        # Durable off-machine backup (recommended on Kaggle). Set
-        # hf_checkpoint_repo in config and HF_TOKEN in the environment / secrets.
+    def _hf_remote_path(self, name: str) -> str:
+        subdir = str(self.config.get("hf_checkpoint_subdir", "")).strip("/")
+        return f"{subdir}/{name}" if subdir else name
+
+    def _persist_remote(self, *, epoch: int, sample_path: Path | None = None) -> None:
         hf_repo = self.config.get("hf_checkpoint_repo")
-        if hf_repo:
-            self._upload_hf_checkpoint(latest_path, epoch=epoch, repo_id=str(hf_repo))
+        if not hf_repo:
+            return
+        latest_path = self.checkpoint_dir / "latest.pt"
+        self._upload_hf_checkpoint(
+            latest_path,
+            epoch=epoch,
+            repo_id=str(hf_repo),
+            sample_path=sample_path,
+        )
 
     def _upload_hf_checkpoint(
-        self, latest_path: Path, *, epoch: int, repo_id: str
+        self,
+        latest_path: Path,
+        *,
+        epoch: int,
+        repo_id: str,
+        sample_path: Path | None = None,
     ) -> None:
         try:
             from huggingface_hub import HfApi
@@ -205,32 +220,34 @@ class LatentSRTrainer:
             return
         try:
             api = HfApi()
-            api.upload_file(
-                path_or_fileobj=str(latest_path),
-                path_in_repo="latest.pt",
-                repo_id=repo_id,
-                repo_type="model",
-            )
-            # Keep a named copy too so you can roll back if needed.
-            api.upload_file(
-                path_or_fileobj=str(latest_path),
-                path_in_repo=f"checkpoint_epoch_{epoch:03d}.pt",
-                repo_id=repo_id,
-                repo_type="model",
-            )
-            # Metrics CSVs (overwrite each epoch; tiny files).
-            for local_path, remote_name in (
-                (self.train_metrics_path, "logs/train_metrics.csv"),
-                (self.val_metrics_path, "logs/val_metrics.csv"),
-            ):
-                if local_path.exists():
-                    api.upload_file(
-                        path_or_fileobj=str(local_path),
-                        path_in_repo=remote_name,
-                        repo_id=repo_id,
-                        repo_type="model",
-                    )
-            print(f"Uploaded checkpoints + logs to hf://{repo_id} (epoch {epoch})")
+            uploads: list[tuple[Path, str]] = [
+                (latest_path, self._hf_remote_path("latest.pt")),
+                (latest_path, self._hf_remote_path(f"checkpoint_epoch_{epoch:03d}.pt")),
+            ]
+            if self.train_metrics_path.exists():
+                uploads.append(
+                    (self.train_metrics_path, self._hf_remote_path("logs/train_metrics.csv"))
+                )
+            if self.val_metrics_path.exists():
+                uploads.append(
+                    (self.val_metrics_path, self._hf_remote_path("logs/val_metrics.csv"))
+                )
+            if sample_path is not None and Path(sample_path).exists():
+                sample_path = Path(sample_path)
+                uploads.append(
+                    (sample_path, self._hf_remote_path(f"samples/{sample_path.name}"))
+                )
+            for local_path, remote_name in uploads:
+                api.upload_file(
+                    path_or_fileobj=str(local_path),
+                    path_in_repo=remote_name,
+                    repo_id=repo_id,
+                    repo_type="model",
+                )
+                print(f"  HF uploaded {remote_name}")
+            prefix = str(self.config.get("hf_checkpoint_subdir", "")).strip("/")
+            dest = f"hf://{repo_id}/{prefix}/" if prefix else f"hf://{repo_id}/"
+            print(f"HF backup complete for epoch {epoch} → {dest} ({len(uploads)} files)")
         except Exception as exc:  # noqa: BLE001 — never crash training on backup failure
             print(f"WARNING: Hugging Face checkpoint upload failed: {exc}")
 
@@ -335,6 +352,11 @@ class LatentSRTrainer:
             f"VAE: {self.config.get('vae_checkpoint')}  |  "
             f"latent_scale: {self.config.get('latent_scale', 1.0)}"
         )
+        hf_repo = self.config.get("hf_checkpoint_repo")
+        hf_subdir = str(self.config.get("hf_checkpoint_subdir", "")).strip("/")
+        if hf_repo:
+            dest = f"hf://{hf_repo}/{hf_subdir}/" if hf_subdir else f"hf://{hf_repo}/"
+            print(f"HF backup every epoch → {dest}")
         print()
 
         for epoch in range(start_epoch + 1, epochs + 1):
@@ -350,14 +372,16 @@ class LatentSRTrainer:
             save_snapshot = epoch == epochs or epoch % checkpoint_every == 0
             self.save_checkpoint(epoch, train_metrics, save_snapshot=save_snapshot)
 
+            sample_path = None
             if sample_every > 0 and (
                 epoch == 1 or epoch == epochs or epoch % sample_every == 0
             ):
                 # Full 1000-step sample is slow; only a few images.
                 print("Generating qualitative SR grid (may take a few minutes)…")
-                path = self.save_qualitative_grid(
+                sample_path = self.save_qualitative_grid(
                     num_images=int(self.config.get("sample_images", 4))
                 )
-                if path is not None:
-                    print(f"Saved comparison grid to {path}")
+                if sample_path is not None:
+                    print(f"Saved comparison grid to {sample_path}")
+            self._persist_remote(epoch=epoch, sample_path=sample_path)
             print()

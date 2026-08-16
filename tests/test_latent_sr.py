@@ -132,3 +132,68 @@ def test_latent_sr_trainer_one_epoch(tmp_path: Path) -> None:
     with torch.no_grad():
         pred, _, _ = loaded(torch.randn_like(z_lr), z_lr)
     assert pred.shape == z_lr.shape
+
+
+def test_latent_sr_hf_subdir_upload(tmp_path: Path, monkeypatch) -> None:
+    uploaded: list[str] = []
+
+    class _FakeApi:
+        def upload_file(self, **kwargs):
+            uploaded.append(kwargs["path_in_repo"])
+
+    import sys
+    from types import ModuleType
+
+    fake_hub = ModuleType("huggingface_hub")
+    fake_hub.HfApi = _FakeApi  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    config = {
+        "epochs": 1,
+        "amp": False,
+        "device": "cpu",
+        "checkpoint_dir": str(tmp_path / "ckpt"),
+        "sample_dir": str(tmp_path / "samples"),
+        "log_dir": str(tmp_path / "logs"),
+        "vae_checkpoint": "synthetic",
+        "latent_scale": 1.0,
+        "hr_size": 128,
+        "validate_every": 1,
+        "checkpoint_every": 1,
+        "sample_every": 0,
+        "latent_channels": 4,
+        "latent_size": 32,
+        "base_channels": 32,
+        "channel_mult": [1, 2],
+        "num_res_blocks": 1,
+        "attention_resolutions": [16],
+        "dropout": 0.0,
+        "num_timesteps": 4,
+        "beta_start": 1e-4,
+        "beta_end": 0.02,
+        "seed": 0,
+        "hf_checkpoint_repo": "user/test-repo",
+        "hf_checkpoint_subdir": "latent_sr_q2",
+    }
+    vae = VAE(base_channels=32, num_res_blocks=1)
+    freeze_vae(vae)
+    sr_encoder = OnTheFlySRLatentEncoder(vae, latent_scale=1.0, hr_size=128)
+    loader = DataLoader(
+        TensorDataset(torch.rand(4, 3, 32, 32), torch.rand(4, 3, 128, 128)),
+        batch_size=2,
+    )
+    model = build_conditioned_latent_ddpm_from_config(config)
+    trainer = LatentSRTrainer(
+        model=model,
+        optimizer=torch.optim.Adam(model.parameters(), lr=1e-3),
+        criterion=DDPMLoss(),
+        train_loader=loader,
+        val_loader=loader,
+        sr_encoder=sr_encoder,
+        config=config,
+    )
+    trainer.train()
+    assert "latent_sr_q2/latest.pt" in uploaded
+    assert "latent_sr_q2/checkpoint_epoch_001.pt" in uploaded
+    assert "latent_sr_q2/logs/train_metrics.csv" in uploaded
+    assert "latest.pt" not in uploaded

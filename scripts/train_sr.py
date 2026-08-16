@@ -1,4 +1,4 @@
-"""Train conditional latent DDPM for super-resolution (Phase 8).
+"""Train conditional latent DDPM for super-resolution.
 
 Examples:
   python scripts/train_sr.py --config configs/latent_sr.yaml --epochs 1 --no-download
@@ -29,6 +29,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument(
+        "--vae-checkpoint",
+        type=Path,
+        default=None,
+        help="Override frozen VAE path from the config.",
+    )
     parser.add_argument(
         "--download",
         action=argparse.BooleanOptionalAction,
@@ -59,6 +66,10 @@ def main() -> None:
         config["epochs"] = args.epochs
     if args.device is not None:
         config["device"] = args.device
+    if args.batch_size is not None:
+        config["batch_size"] = args.batch_size
+    if args.vae_checkpoint is not None:
+        config["vae_checkpoint"] = str(args.vae_checkpoint)
 
     if args.resume is None and config.get("seed") is not None:
         torch.manual_seed(int(config["seed"]))

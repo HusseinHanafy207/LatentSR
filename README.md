@@ -209,6 +209,27 @@ python scripts/train_vae_sr.py \
 
 Then re-run `scripts/evaluate_vae.py` on the new checkpoint. Watch **cosine(z_lr, z_hr)** (baseline ~0.63) and **soft_decode PSNR**; `vae_hr` PSNR should stay high. Hugging Face uploads go under `vae_sr/` so they do not overwrite the LatentSR DDPM `latest.pt`.
 
+### Matched LatentSR on VAE-SR (Q2)
+
+Same UNet, schedule, and 50 epochs as Phase 8; only the frozen VAE changes. HF uploads go under `latent_sr_q2/`.
+
+```bash
+python scripts/train_sr.py \
+  --config configs/latent_sr_q2.yaml \
+  --vae-checkpoint outputs/vae_sr/checkpoints/latest.pt \
+  --epochs 1 --device cuda --no-download
+```
+
+Full run / resume:
+
+```bash
+python scripts/train_sr.py --config configs/latent_sr_q2.yaml --device cuda --no-download
+python scripts/train_sr.py --config configs/latent_sr_q2.yaml \
+  --resume path/to/latent_sr_q2/latest.pt --epochs 50 --device cuda --no-download
+```
+
+Then evaluate with `scripts/evaluate.py` pointing at the Q2 DDPM and VAE-SR checkpoints.
+
 ---
 
 ## Layout
