@@ -1,0 +1,50 @@
+# Colab: matched LatentSR on VAE-SR, resume from Drive.
+# Logs/checkpoints/samples stay on Drive so CSVs are appended, not reset.
+
+dataset: CelebA
+data_dir: /content/data/raw
+hr_size: 128
+lr_size: 32
+
+# Must be the Q2 SR-aware VAE (not Phase-1 VAE-1).
+vae_checkpoint: /content/drive/MyDrive/LatentSR/outputs/vae_sr/checkpoints/latest.pt
+latent_scale: 1.0
+
+latent_channels: 4
+latent_size: 32
+base_channels: 64
+channel_mult: [1, 2, 4]
+num_res_blocks: 2
+attention_resolutions: [16, 8]
+dropout: 0.1
+
+num_timesteps: 1000
+beta_start: 0.0001
+beta_end: 0.02
+
+batch_size: 64
+epochs: 50
+learning_rate: 0.0002
+optimizer: Adam
+num_workers: 2
+pin_memory: true
+amp: true
+validate_every: 5
+checkpoint_every: 1
+sample_every: 25
+sample_images: 4
+
+device: auto
+
+# Folder you uploaded. If the ckpt dir is named "checkpoints", change this line.
+checkpoint_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr_q2/checkpoint
+sample_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr_q2/samples
+log_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr_q2/logs
+train_metrics_file: train_metrics.csv
+val_metrics_file: val_metrics.csv
+
+# Drive is durable on Colab; leave HF off unless you log in.
+# hf_checkpoint_repo: HusseinHamouda/LatentSR-checkpoints
+# hf_checkpoint_subdir: latent_sr_q2
+
+seed: 42
