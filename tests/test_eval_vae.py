@@ -1,4 +1,4 @@
-"""Phase A: VAE bottleneck eval (no diffusion)."""
+"""VAE bottleneck eval (no diffusion)."""
 
 from __future__ import annotations
 
@@ -93,3 +93,9 @@ def test_evaluate_vae_smoke(tmp_path: Path) -> None:
     assert (tmp_path / "metrics.csv").is_file()
     assert (tmp_path / "eval_vae_compare.png").is_file()
     assert "Gate:" in result["bottleneck_note"]
+    assert (tmp_path / "per_image.csv").is_file()
+    rows = result["per_image"]
+    assert [row["val_index"] for row in rows] == [0, 1, 2]
+    assert "soft_decode_psnr" in rows[0]
+    assert "z_lr_cosine" in rows[0]
+    assert "hr_edge_energy" in rows[0]

@@ -146,6 +146,7 @@ def main() -> None:
     print(result["bottleneck_note"])
     print()
     print(f"Wrote metrics + grids under: {output_dir}")
+    print(f"Per-image scores: {output_dir / 'per_image.csv'}")
     if "grid_path" in result:
         print(f"Comparison grid: {result['grid_path']}")
     print(

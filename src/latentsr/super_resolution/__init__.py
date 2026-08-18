@@ -14,7 +14,12 @@ from latentsr.super_resolution.inference import (
     soft_decode_from_lr,
     super_resolve,
 )
-from latentsr.super_resolution.sample import sample_conditional_latents, sample_sr_images
+from latentsr.super_resolution.sample import (
+    image_noise_seed,
+    sample_conditional_latents,
+    sample_sr_images,
+    seeded_noise_like,
+)
 from latentsr.super_resolution.trainer import LatentSRTrainer
 
 __all__ = [
@@ -26,8 +31,10 @@ __all__ = [
     "load_conditioned_latent_ddpm_checkpoint",
     "load_sr_components",
     "prepare_lr_batch",
+    "image_noise_seed",
     "sample_conditional_latents",
     "sample_sr_images",
+    "seeded_noise_like",
     "save_sr_comparison_grid",
     "soft_decode_from_lr",
     "super_resolve",

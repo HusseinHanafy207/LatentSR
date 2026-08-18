@@ -21,8 +21,11 @@ from latentsr.datasets.onthefly_sr_latent import upsample_bicubic
 from latentsr.metrics.image_metrics import (
     LPIPSMetric,
     batch_metrics,
+    dataset_filename,
     format_metric_table,
+    sobel_magnitude,
     summarize_values,
+    write_per_image_csv,
     write_summary_files,
 )
 from latentsr.vae.latent import decode_scaled, encode_scaled
@@ -153,19 +156,23 @@ def evaluate_vae(
     scores: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     z_mse_values: list[float] = []
     z_cosine_values: list[float] = []
+    per_image_rows: list[dict[str, Any]] = []
     mu_hr_moments = _MomentAccumulator()
     mu_lr_moments = _MomentAccumulator()
 
     remaining = max(int(num_images), 1)
+    next_index = 0
     grid_lr = grid_bicubic = grid_soft = grid_vae_hr = grid_hr = None
 
     iterator = tqdm(loader, desc="evaluate-vae", leave=False) if show_progress else loader
+    dataset = loader.dataset
     for lr, hr in iterator:
         if remaining <= 0:
             break
         take = min(lr.shape[0], remaining)
         lr = lr[:take].to(device)
         hr = hr[:take].to(device)
+        indices = list(range(next_index, next_index + take))
 
         bicubic = upsample_bicubic(lr, hr_size)
         z_hr = encode_scaled(vae, hr, latent_scale=latent_scale)
@@ -174,8 +181,10 @@ def evaluate_vae(
         soft = decode_scaled(vae, z_lr, latent_scale=latent_scale).clamp(0.0, 1.0)
 
         methods = {"bicubic": bicubic, "soft_decode": soft, "vae_hr": vae_hr}
+        batch_metric_tensors: dict[str, dict[str, torch.Tensor]] = {}
         for name, output in methods.items():
             metrics = batch_metrics(output, hr, lpips_fn=lpips_fn)
+            batch_metric_tensors[name] = metrics
             for key, values in metrics.items():
                 scores[name][key].extend(values.detach().cpu().tolist())
 
@@ -183,10 +192,27 @@ def evaluate_vae(
         mu_lr = z_lr / latent_scale
         mu_hr_moments.update(mu_hr)
         mu_lr_moments.update(mu_lr)
-        z_mse_values.extend((z_lr - z_hr).pow(2).mean(dim=(1, 2, 3)).cpu().tolist())
-        z_cosine_values.extend(
-            F.cosine_similarity(z_lr.flatten(1), z_hr.flatten(1)).cpu().tolist()
-        )
+        z_mse = (z_lr - z_hr).pow(2).mean(dim=(1, 2, 3))
+        z_l2 = (z_lr - z_hr).flatten(1).norm(dim=1)
+        z_cosine = F.cosine_similarity(z_lr.flatten(1), z_hr.flatten(1))
+        z_mse_values.extend(z_mse.cpu().tolist())
+        z_cosine_values.extend(z_cosine.cpu().tolist())
+        hr_edge = sobel_magnitude(hr).mean(dim=(1, 2, 3))
+
+        for i, val_index in enumerate(indices):
+            row: dict[str, Any] = {
+                "val_index": int(val_index),
+                "filename": dataset_filename(dataset, int(val_index)),
+            }
+            for method, metric_map in batch_metric_tensors.items():
+                for key, values in metric_map.items():
+                    row[f"{method}_{key}"] = float(values[i].detach().cpu().item())
+            row["z_lr_mse"] = float(z_mse[i].item())
+            row["z_lr_rmse"] = float(z_mse[i].clamp_min(0.0).sqrt().item())
+            row["z_lr_l2"] = float(z_l2[i].item())
+            row["z_lr_cosine"] = float(z_cosine[i].item())
+            row["hr_edge_energy"] = float(hr_edge[i].detach().cpu().item())
+            per_image_rows.append(row)
 
         if grid_lr is None:
             n_grid = min(grid_images, take)
@@ -197,6 +223,7 @@ def evaluate_vae(
             grid_hr = hr[:n_grid].cpu()
 
         remaining -= take
+        next_index += take
 
     summary: dict[str, dict[str, dict[str, float]]] = {}
     for method, metric_map in scores.items():
@@ -227,6 +254,7 @@ def evaluate_vae(
         "table": format_metric_table(summary),
         "latent_stats": latent_stats,
         "bottleneck_note": bottleneck_note,
+        "per_image": per_image_rows,
     }
 
     if output_dir is not None and grid_lr is not None:
@@ -255,5 +283,6 @@ def evaluate_vae(
                 "bottleneck_note": bottleneck_note,
             },
         )
+        write_per_image_csv(output_dir / "per_image.csv", per_image_rows)
 
     return result

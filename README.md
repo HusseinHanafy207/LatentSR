@@ -158,7 +158,7 @@ python scripts/super_resolve.py \
   --output outputs/latent_sr/samples/sr_out.png
 ```
 
-Add `--include-soft-decode` to also show `decode(z_lr)` in the comparison grid.
+Add `--from-celeba` to sample a val comparison grid. `decode(z_lr)` is included by default; pass `--no-include-soft-decode` to hide that row.
 
 ### Evaluate vs bicubic (Phase 10)
 
@@ -173,10 +173,41 @@ python scripts/evaluate.py \
 ```
 
 Writes under `output_dir` (default `outputs/eval/`):
-- `metrics.csv` / `metrics.json` — mean±std PSNR, SSIM, LPIPS for **bicubic** vs **LatentSR**
-- `eval_compare.png` — nearest(LR) | bicubic | LatentSR | HR
+- `metrics.csv` / `metrics.json` — mean±std for **bicubic**, **soft_decode**, **LatentSR**
+- `per_image.csv` — one row per val image (needed for paired tests)
+- `eval_compare.png` — nearest(LR) | bicubic | LatentSR | decode(z_lr) | HR
+
+Reverse-diffusion noise (``x_T`` **and** every reverse step) is seeded **per val index** from `--seed` (default 42), so two checkpoints can be compared on the same images and the same noise regardless of batch size. Use `--no-include-soft-decode` to drop `decode(z_lr)` from the grid only; it is still scored in `per_image.csv`.
 
 Use `--no-lpips` if you skip the `lpips` install. Full reverse diffusion per image is slow; start with `--num-images 16`.
+
+### Paired Q2 comparison (VAE-1 vs VAE-SR)
+
+Do this before any λ sweep. Re-run **both** existing DDPMs with identical settings, then stats:
+
+```bash
+python scripts/evaluate.py \
+  --checkpoint outputs/latent_sr/checkpoints/latest.pt \
+  --vae-checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt \
+  --config configs/eval_sr.yaml \
+  --output-dir outputs/eval_sr_vae1_paired \
+  --num-images 64 --batch-size 4 --seed 42 --no-download
+
+python scripts/evaluate.py \
+  --checkpoint outputs/latent_sr_q2/checkpoints/latest.pt \
+  --vae-checkpoint outputs/vae_sr/checkpoints/latest.pt \
+  --config configs/eval_sr.yaml \
+  --output-dir outputs/eval_sr_q2_paired \
+  --num-images 64 --batch-size 4 --seed 42 --no-download
+
+python scripts/compare_sr_evals.py \
+  --baseline outputs/eval_sr_vae1_paired/per_image.csv \
+  --candidate outputs/eval_sr_q2_paired/per_image.csv \
+  --baseline-name vae1 --candidate-name vae_sr \
+  --output-dir outputs/eval_sr_compare
+```
+
+`compare_sr_evals.py` writes permutation p-values and bootstrap 95% CIs (Δ = VAE-SR − VAE-1) for PSNR/LPIPS (primary) and SSIM/edge MAE (secondary), plus `delta_psnr_soft_vs_sr.png` and `z_lr_rmse_vs_z_sr_rmse.png`. Decide whether a λ sweep is justified from those, not from a dB cutoff.
 
 ### VAE bottleneck (research Phase A)
 
@@ -191,6 +222,7 @@ python scripts/evaluate_vae.py \
 
 Writes under `output_dir` (default `outputs/eval_vae/`):
 - `metrics.csv` / `metrics.json` — PSNR, SSIM, LPIPS, Sobel edge MAE, radial FFT-band error for **bicubic**, **decode(z_lr)**, **decode(z_hr)**
+- `per_image.csv` — one row per val image, including cosine / latent MSE
 - `std(μ)` and suggested `latent_scale = 1 / std(μ_HR)`
 - `eval_vae_compare.png` — nearest(LR) | bicubic | decode(z_lr) | decode(z_hr) | HR
 

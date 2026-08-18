@@ -53,8 +53,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--include-soft-decode",
-        action="store_true",
-        help="Also score decode(z_lr) as soft_decode baseline.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Add decode(z_lr) to the comparison grid (always scored in per_image.csv).",
     )
     parser.add_argument(
         "--download",
@@ -110,6 +111,11 @@ def main() -> None:
     print(f"latent_scale: {latent_scale}")
     print(f"data_dir: {data_dir}")
     print(f"Evaluating {num_images} val images on {device} …")
+    print(
+        f"Per-image noise seed={int(args.seed)} "
+        "(x_T and every reverse step; independent of batch size; "
+        "use the same seed for paired runs)."
+    )
     print("Note: each image runs a full reverse diffusion chain (slow on CPU).")
 
     _, val_loader = get_sr_pair_dataloaders(
@@ -136,6 +142,7 @@ def main() -> None:
             show_progress=True,
             grid_images=int(args.grid_images),
             output_dir=output_dir,
+            noise_seed=int(args.seed),
         )
     except ImportError as exc:
         if args.lpips:
@@ -149,6 +156,7 @@ def main() -> None:
     print()
     print(f"Images scored: {result['num_images']}")
     print(f"Wrote metrics + grids under: {output_dir}")
+    print(f"Per-image scores: {output_dir / 'per_image.csv'}")
     if "grid_path" in result:
         print(f"Comparison grid: {result['grid_path']}")
     print(

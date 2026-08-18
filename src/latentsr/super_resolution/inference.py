@@ -82,6 +82,9 @@ def super_resolve(
     *,
     hr_size: int = 128,
     latent_scale: float = 1.0,
+    noise: torch.Tensor | None = None,
+    val_indices: list[int] | None = None,
+    noise_seed: int | None = None,
     show_progress: bool = True,
 ) -> torch.Tensor:
     """Super-resolve an LR batch ``(B, 3, lr, lr)`` → HR ``(B, 3, hr, hr)``."""
@@ -93,6 +96,9 @@ def super_resolve(
         vae,
         z_lr,
         latent_scale=latent_scale,
+        noise=noise,
+        val_indices=val_indices,
+        noise_seed=noise_seed,
         show_progress=show_progress,
     )
 

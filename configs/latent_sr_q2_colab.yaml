@@ -6,7 +6,7 @@ data_dir: /content/data/raw
 hr_size: 128
 lr_size: 32
 
-# Must be the Q2 SR-aware VAE (not Phase-1 VAE-1).
+
 vae_checkpoint: /content/drive/MyDrive/LatentSR/outputs/vae_sr/checkpoints/latest.pt
 latent_scale: 1.0
 
@@ -36,8 +36,8 @@ sample_images: 4
 
 device: auto
 
-# Folder you uploaded. If the ckpt dir is named "checkpoints", change this line.
-checkpoint_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr_q2/checkpoint
+
+checkpoint_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr_q2/checkpoints
 sample_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr_q2/samples
 log_dir: /content/drive/MyDrive/LatentSR/outputs/latent_sr_q2/logs
 train_metrics_file: train_metrics.csv

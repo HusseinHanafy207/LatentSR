@@ -2,7 +2,7 @@
 
 PSNR and SSIM reuse ``generative_models.evaluation``. LPIPS uses the optional
 ``lpips`` package (AlexNet by default). Edge MAE and radial FFT-band errors
-are local (no extra weights).
+are local.
 """
 
 from __future__ import annotations
@@ -254,6 +254,43 @@ def format_metric_table(results: dict[str, dict[str, Any]]) -> str:
             cells.append(f"{stats['mean']:.4f}±{stats['std']:.4f}".rjust(18))
         lines.append("".join(cells))
     return "\n".join(lines)
+
+
+def dataset_filename(dataset: Any, index: int) -> str:
+    """Best-effort CelebA filename; empty string if the dataset has none."""
+    base = dataset
+    seen: set[int] = set()
+    while hasattr(base, "base") and id(base) not in seen:
+        seen.add(id(base))
+        base = base.base
+    names = getattr(base, "filename", None)
+    if names is None:
+        return ""
+    try:
+        name = names[index]
+    except (IndexError, TypeError, KeyError):
+        return ""
+    if isinstance(name, bytes):
+        return name.decode("utf-8", errors="replace")
+    return str(name)
+
+
+def write_per_image_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Write one row per image (wide: ``{method}_{metric}`` plus latent columns)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        path.write_text("", encoding="utf-8")
+        return
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def write_summary_files(

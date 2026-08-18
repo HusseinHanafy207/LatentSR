@@ -1,4 +1,4 @@
-# Phase 10 — LatentSR vs bicubic evaluation on CelebA val
+# LatentSR vs bicubic evaluation on CelebA val
 
 dataset: CelebA
 data_dir: /kaggle/working/data/raw
@@ -8,10 +8,12 @@ latent_scale: 1.0
 
 # How many val images to score (full 1000-step sampling each — keep modest)
 num_images: 64
+# Batch size no longer affects reverse-diffusion noise (seeded per val_index).
 batch_size: 4
 num_workers: 2
 pin_memory: true
 
 output_dir: /kaggle/working/outputs/eval
 device: auto
+# Same seed + first 64 val images for every paired VAE-1 vs VAE-SR run.
 seed: 42
