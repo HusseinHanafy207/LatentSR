@@ -1,4 +1,4 @@
-# Colab: matched LatentSR on VAE-SR, resume from Drive.
+# Colab: matched LatentSR on VAE-SR, resume from Drive (epochs 11–50).
 # Logs/checkpoints/samples stay on Drive so CSVs are appended, not reset.
 
 dataset: CelebA

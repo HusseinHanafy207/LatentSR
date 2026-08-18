@@ -1,4 +1,4 @@
-"""Evaluate LatentSR vs bicubic on CelebA val (Phase 10).
+"""Evaluate LatentSR vs bicubic on CelebA val.
 
 Examples:
   python scripts/evaluate.py \\
@@ -33,6 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grid-images", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="CelebA root (folder that contains celeba/). Overrides config/checkpoint.",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -93,16 +99,22 @@ def main() -> None:
         if args.output_dir is not None
         else merged.get("output_dir", "outputs/eval")
     )
+    data_dir = (
+        str(args.data_dir)
+        if args.data_dir is not None
+        else merged.get("data_dir", "data/raw")
+    )
 
     print(f"SR epoch: {meta.get('sr_epoch')}")
     print(f"VAE: {meta['vae_checkpoint']}")
     print(f"latent_scale: {latent_scale}")
+    print(f"data_dir: {data_dir}")
     print(f"Evaluating {num_images} val images on {device} …")
     print("Note: each image runs a full reverse diffusion chain (slow on CPU).")
 
     _, val_loader = get_sr_pair_dataloaders(
         batch_size=batch_size,
-        data_dir=merged.get("data_dir", "data/raw"),
+        data_dir=data_dir,
         hr_size=hr_size,
         lr_size=lr_size,
         num_workers=int(merged.get("num_workers", 0)),
