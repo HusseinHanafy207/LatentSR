@@ -74,11 +74,21 @@ def main() -> None:
     device = get_device(args.device or str(config.get("device", "auto")))
     torch.manual_seed(int(args.seed if args.seed is not None else config.get("seed", 42)))
 
-    model, vae, meta = load_sr_components(
-        args.checkpoint,
-        vae_checkpoint=args.vae_checkpoint,
-        map_location=device,
-    )
+    if not Path(args.checkpoint).is_file():
+        raise SystemExit(
+            f"SR checkpoint not found:\n  {args.checkpoint}\n"
+            "On Colab use Drive paths, for example:\n"
+            "  --checkpoint /content/drive/MyDrive/LatentSR/outputs/latent_sr/checkpoints/latest.pt"
+        )
+
+    try:
+        model, vae, meta = load_sr_components(
+            args.checkpoint,
+            vae_checkpoint=args.vae_checkpoint,
+            map_location=device,
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
     ckpt_cfg = meta.get("config") or {}
     merged = {**ckpt_cfg, **config}
 
@@ -105,6 +115,12 @@ def main() -> None:
         if args.data_dir is not None
         else merged.get("data_dir", "data/raw")
     )
+    if not Path(data_dir).exists():
+        raise SystemExit(
+            f"data_dir not found: {data_dir}\n"
+            "configs/eval_sr.yaml is the Kaggle config. On Colab run:\n"
+            "  --config configs/eval_sr_colab.yaml --data-dir /content/data/raw"
+        )
 
     print(f"SR epoch: {meta.get('sr_epoch')}")
     print(f"VAE: {meta['vae_checkpoint']}")

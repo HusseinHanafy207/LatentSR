@@ -209,6 +209,30 @@ python scripts/compare_sr_evals.py \
 
 `compare_sr_evals.py` writes permutation p-values and bootstrap 95% CIs (Δ = VAE-SR − VAE-1) for PSNR/LPIPS (primary) and SSIM/edge MAE (secondary), plus `delta_psnr_soft_vs_sr.png` and `z_lr_rmse_vs_z_sr_rmse.png`. Decide whether a λ sweep is justified from those, not from a dB cutoff.
 
+**Colab:** `configs/eval_sr.yaml` is Kaggle (`/kaggle/working/...`). Use `configs/eval_sr_colab.yaml`, and always pass `--vae-checkpoint` because a Kaggle-trained DDPM stores a Kaggle VAE path in its metadata.
+
+```bash
+python scripts/evaluate.py \
+  --checkpoint /content/drive/MyDrive/LatentSR/outputs/latent_sr/checkpoints/latest.pt \
+  --vae-checkpoint /content/drive/MyDrive/LatentSR/outputs/vae/checkpoints/checkpoint_epoch_050.pt \
+  --config configs/eval_sr_colab.yaml \
+  --output-dir /content/drive/MyDrive/LatentSR/outputs/eval_sr_vae1_paired \
+  --num-images 64 --batch-size 4 --seed 42 --no-download
+
+python scripts/evaluate.py \
+  --checkpoint /content/drive/MyDrive/LatentSR/outputs/latent_sr_q2/checkpoints/latest.pt \
+  --vae-checkpoint /content/drive/MyDrive/LatentSR/outputs/vae_sr/checkpoints/latest.pt \
+  --config configs/eval_sr_colab.yaml \
+  --output-dir /content/drive/MyDrive/LatentSR/outputs/eval_sr_q2_paired \
+  --num-images 64 --batch-size 4 --seed 42 --no-download
+
+python scripts/compare_sr_evals.py \
+  --baseline /content/drive/MyDrive/LatentSR/outputs/eval_sr_vae1_paired/per_image.csv \
+  --candidate /content/drive/MyDrive/LatentSR/outputs/eval_sr_q2_paired/per_image.csv \
+  --baseline-name vae1 --candidate-name vae_sr \
+  --output-dir /content/drive/MyDrive/LatentSR/outputs/eval_sr_compare
+```
+
 ### VAE bottleneck (research Phase A)
 
 No diffusion — measures what the frozen VAE already loses:

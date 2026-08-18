@@ -1,0 +1,18 @@
+# Colab VAE bottleneck eval.
+
+dataset: CelebA
+data_dir: /content/data/raw
+hr_size: 128
+lr_size: 32
+latent_scale: 1.0
+
+vae_checkpoint: /content/drive/MyDrive/LatentSR/outputs/vae/checkpoints/checkpoint_epoch_050.pt
+
+num_images: 64
+batch_size: 8
+num_workers: 2
+pin_memory: true
+
+output_dir: /content/drive/MyDrive/LatentSR/outputs/eval_vae
+device: auto
+seed: 42

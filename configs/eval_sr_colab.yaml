@@ -1,0 +1,18 @@
+# Colab paired eval. Do not use configs/eval_sr.yaml here — that file is Kaggle.
+
+dataset: CelebA
+data_dir: /content/data/raw
+hr_size: 128
+lr_size: 32
+latent_scale: 1.0
+
+num_images: 64
+# Batch size does not affect reverse-diffusion noise (seeded per val_index).
+batch_size: 4
+num_workers: 2
+pin_memory: true
+
+# Override with --output-dir so VAE-1 and Q2 runs do not overwrite each other.
+output_dir: /content/drive/MyDrive/LatentSR/outputs/eval_sr
+device: auto
+seed: 42

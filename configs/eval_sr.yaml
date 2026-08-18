@@ -1,4 +1,5 @@
-# LatentSR vs bicubic evaluation on CelebA val
+# LatentSR vs bicubic evaluation on CelebA val (Kaggle).
+# On Colab use configs/eval_sr_colab.yaml instead.
 
 dataset: CelebA
 data_dir: /kaggle/working/data/raw

@@ -36,6 +36,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--latent-scale", type=float, default=None)
     parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="CelebA root (folder that contains celeba/). Overrides config.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -67,6 +73,12 @@ def main() -> None:
     vae_path = args.vae_checkpoint or config.get("vae_checkpoint")
     if not vae_path:
         raise SystemExit("Pass --vae-checkpoint or set vae_checkpoint in the config.")
+    vae_path = Path(vae_path)
+    if not vae_path.is_file():
+        raise SystemExit(
+            f"VAE checkpoint not found:\n  {vae_path}\n"
+            "On Colab use --config configs/eval_vae_colab.yaml or pass a Drive path."
+        )
 
     vae, ckpt = load_frozen_vae(vae_path, map_location=device)
     if not is_frozen(vae):
@@ -90,15 +102,27 @@ def main() -> None:
         if args.output_dir is not None
         else config.get("output_dir", "outputs/eval_vae")
     )
+    data_dir = (
+        str(args.data_dir)
+        if args.data_dir is not None
+        else config.get("data_dir", "data/raw")
+    )
+    if not Path(data_dir).exists():
+        raise SystemExit(
+            f"data_dir not found: {data_dir}\n"
+            "On Colab use --config configs/eval_vae_colab.yaml "
+            "or --data-dir /content/data/raw."
+        )
 
     print(f"VAE epoch: {ckpt.get('epoch')}")
     print(f"VAE: {vae_path}")
     print(f"latent_scale (used for encode/decode): {latent_scale}")
+    print(f"data_dir: {data_dir}")
     print(f"Evaluating {num_images} val images on {device} (no diffusion) …")
 
     _, val_loader = get_sr_pair_dataloaders(
         batch_size=batch_size,
-        data_dir=config.get("data_dir", "data/raw"),
+        data_dir=data_dir,
         hr_size=hr_size,
         lr_size=lr_size,
         num_workers=int(config.get("num_workers", 0)),

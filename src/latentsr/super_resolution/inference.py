@@ -1,7 +1,6 @@
-"""LR → HR inference helpers (Phase 9).
+"""LR → HR inference helpers.
 
 Pipeline:
-
     LR_32 → bicubic upsample → encode_scaled → z_lr
     noise → ConditionalLatentDDPM(· | z_lr) → z_hr_scaled
     decode_scaled(z_hr_scaled) → HR_128
@@ -45,6 +44,18 @@ def load_sr_components(
     if not vae_path:
         raise ValueError(
             "VAE checkpoint not found in SR metadata; pass --vae-checkpoint."
+        )
+    vae_path = Path(vae_path)
+    if not vae_path.is_file():
+        raise FileNotFoundError(
+            f"VAE checkpoint not found:\n  {vae_path}\n\n"
+            "The SR checkpoint stores the VAE path from the machine that trained it "
+            "(often a Kaggle path like /kaggle/working/...). That file is not on Colab. "
+            "Pass the Drive checkpoint explicitly, for example:\n"
+            "  --vae-checkpoint /content/drive/MyDrive/LatentSR/outputs/vae/checkpoints/checkpoint_epoch_050.pt\n"
+            "VAE-SR:\n"
+            "  --vae-checkpoint /content/drive/MyDrive/LatentSR/outputs/vae_sr/checkpoints/latest.pt\n"
+            "Also use --config configs/eval_sr_colab.yaml and --data-dir /content/data/raw."
         )
     latent_scale = float(
         checkpoint.get("latent_scale", config.get("latent_scale", 1.0))
