@@ -1,9 +1,12 @@
-"""LR-conditioned UNet for latent super-resolution (Phase 8).
+"""LR-conditioned UNet for latent super-resolution.
 
-Concat layout (same idea as inpainting's ConditionedUNet):
+Concat layout (Phase 8):
 
     [noisy_z_hr | z_lr]  →  in_channels = 2 * C_z
     UNet → predicted noise ε̂  (out_channels = C_z)
+
+AdaGN / FiLM (Q2 follow-up): ``x_t`` stays ``C_z`` channels; ``z_lr`` modulates
+features at every UNet scale. Set ``condition_type: adagn`` in the config.
 """
 
 from __future__ import annotations
@@ -15,6 +18,8 @@ import torch
 import torch.nn as nn
 from generative_models.ddpm import NoiseScheduler, UNet
 from generative_models.ddpm.forward import forward_diffuse
+
+from latentsr.super_resolution.adagn import build_adagn_unet_from_config
 
 
 class ConditionedLatentUNet(nn.Module):
@@ -32,6 +37,7 @@ class ConditionedLatentUNet(nn.Module):
         self.latent_channels = latent_channels
         self.in_channels = 2 * latent_channels
         self.out_channels = latent_channels
+        self.condition_type = "concat"
         self.unet = UNet(
             in_channels=self.in_channels,
             out_channels=self.out_channels,
@@ -59,7 +65,7 @@ class ConditionalLatentDDPM(nn.Module):
 
     def __init__(
         self,
-        unet: ConditionedLatentUNet,
+        unet: nn.Module,
         scheduler: NoiseScheduler | None = None,
         *,
         num_timesteps: int = 1000,
@@ -98,20 +104,28 @@ class ConditionalLatentDDPM(nn.Module):
 def build_conditioned_latent_ddpm_from_config(
     config: dict[str, Any],
 ) -> ConditionalLatentDDPM:
-    """Build Phase-8 model from a YAML config dict."""
-    latent_channels = int(config.get("latent_channels", 4))
-    latent_size = int(config.get("latent_size", 32))
-    unet = ConditionedLatentUNet(
-        latent_channels=latent_channels,
-        base_channels=int(config.get("base_channels", 64)),
-        channel_mult=tuple(int(m) for m in config.get("channel_mult", [1, 2, 4])),
-        num_res_blocks=int(config.get("num_res_blocks", 2)),
-        attention_resolutions=tuple(
-            int(r) for r in config.get("attention_resolutions", [16, 8])
-        ),
-        dropout=float(config.get("dropout", 0.1)),
-        image_size=latent_size,
-    )
+    """Build concat or AdaGN LatentSR from a YAML config dict."""
+    condition_type = str(config.get("condition_type", "concat")).strip().lower()
+    if condition_type in {"adagn", "film"}:
+        unet: nn.Module = build_adagn_unet_from_config(config)
+    elif condition_type == "concat":
+        latent_channels = int(config.get("latent_channels", 4))
+        latent_size = int(config.get("latent_size", 32))
+        unet = ConditionedLatentUNet(
+            latent_channels=latent_channels,
+            base_channels=int(config.get("base_channels", 64)),
+            channel_mult=tuple(int(m) for m in config.get("channel_mult", [1, 2, 4])),
+            num_res_blocks=int(config.get("num_res_blocks", 2)),
+            attention_resolutions=tuple(
+                int(r) for r in config.get("attention_resolutions", [16, 8])
+            ),
+            dropout=float(config.get("dropout", 0.1)),
+            image_size=latent_size,
+        )
+    else:
+        raise ValueError(
+            f"Unknown condition_type={condition_type!r}; use 'concat' or 'adagn'."
+        )
     return ConditionalLatentDDPM(
         unet=unet,
         num_timesteps=int(config.get("num_timesteps", 1000)),

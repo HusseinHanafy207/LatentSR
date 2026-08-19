@@ -286,6 +286,29 @@ python scripts/train_sr.py --config configs/latent_sr_q2.yaml \
 
 Then evaluate with `scripts/evaluate.py` pointing at the Q2 DDPM and VAE-SR checkpoints.
 
+### AdaGN conditioner (concat follow-up)
+
+Q2 showed VAE-SR improves `decode(z_lr)` a lot but concat LatentSR barely moves. Train the **same** frozen VAE-SR with FiLM/AdaGN instead of channel concat (`x_t` stays 4 channels; `z_lr` modulates every UNet scale). Do **not** resume a concat checkpoint.
+
+Kaggle:
+
+```bash
+python scripts/train_sr.py \
+  --config configs/latent_sr_adagn_q2.yaml \
+  --vae-checkpoint /kaggle/working/outputs/vae_sr/checkpoints/latest.pt \
+  --epochs 1 --device cuda --no-download
+```
+
+Colab (Drive):
+
+```bash
+python scripts/train_sr.py \
+  --config configs/latent_sr_adagn_q2_colab.yaml \
+  --epochs 50 --device cuda --no-download
+```
+
+HF uploads go under `latent_sr_adagn_q2/` (Kaggle config only). After 50 epochs, evaluate with the same paired protocol as Q2 (`--seed 42`, `--include-soft-decode`, `per_image.csv`) and compare to `outputs/eval_sr_q2_paired/`. The VAE-1 AdaGN control is the same config with `--vae-checkpoint` pointing at VAE-1 and a new `checkpoint_dir`.
+
 ---
 
 ## Layout

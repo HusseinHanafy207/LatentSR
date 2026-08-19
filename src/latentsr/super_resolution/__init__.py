@@ -1,5 +1,6 @@
-"""Latent super-resolution (Phase 8+)."""
+"""Latent super-resolution."""
 
+from latentsr.super_resolution.adagn import AdaGNLatentUNet
 from latentsr.super_resolution.condition import (
     ConditionedLatentUNet,
     ConditionalLatentDDPM,
@@ -23,6 +24,7 @@ from latentsr.super_resolution.sample import (
 from latentsr.super_resolution.trainer import LatentSRTrainer
 
 __all__ = [
+    "AdaGNLatentUNet",
     "ConditionedLatentUNet",
     "ConditionalLatentDDPM",
     "LatentSRTrainer",

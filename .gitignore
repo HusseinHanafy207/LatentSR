@@ -221,5 +221,8 @@ __marimo__/
 outputs/**
 !outputs/.gitkeep
 
+# Draft writeups until the rest of the experiment is done
+notes/
+
 # Local data downloads
 data/

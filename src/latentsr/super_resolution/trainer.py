@@ -350,7 +350,8 @@ class LatentSRTrainer:
         )
         print(
             f"VAE: {self.config.get('vae_checkpoint')}  |  "
-            f"latent_scale: {self.config.get('latent_scale', 1.0)}"
+            f"latent_scale: {self.config.get('latent_scale', 1.0)}  |  "
+            f"condition: {self.config.get('condition_type', 'concat')}"
         )
         hf_repo = self.config.get("hf_checkpoint_repo")
         hf_subdir = str(self.config.get("hf_checkpoint_subdir", "")).strip("/")

@@ -91,6 +91,11 @@ def main() -> None:
         map_location="cpu",
     )
     model = build_conditioned_latent_ddpm_from_config(config)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(
+        f"condition_type={config.get('condition_type', 'concat')}  "
+        f"params={n_params / 1e6:.2f}M"
+    )
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config["learning_rate"]))
     criterion = DDPMLoss()
 
