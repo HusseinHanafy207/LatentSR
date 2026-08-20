@@ -22,6 +22,7 @@ from latentsr.metrics.paired_stats import (
     spearman_rho,
 )
 from latentsr.metrics.timestep_diagnostic import run_timestep_diagnostic
+from latentsr.metrics.z0_recon_diagnostic import run_z0_recon_diagnostic
 
 __all__ = [
     "LPIPSMetric",
@@ -37,6 +38,7 @@ __all__ = [
     "frequency_band_error",
     "psnr",
     "run_timestep_diagnostic",
+    "run_z0_recon_diagnostic",
     "sign_flip_permutation_pvalue",
     "spearman_rho",
     "ssim",

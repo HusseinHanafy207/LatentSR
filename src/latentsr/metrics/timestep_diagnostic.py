@@ -1,8 +1,5 @@
 """Timestep diagnostic: does concat LatentSR copy ``z_lr`` into ẑ0?
 
-No training. Paired reverse sampling of VAE-1 vs VAE-SR concat DDPMs with the
-same ``x_T`` and reverse-step noise as ``evaluate_sr`` (seed + ``val_index``).
-
 Logged at every t (t=0 clean … t=T-1 noise):
 
     ||z_lr^SR − z_lr^VAE1||     (constant in t; condition gap)
@@ -137,9 +134,13 @@ def run_timestep_diagnostic(
 
     remaining = max(int(num_images), 1)
     next_index = int(start_index)
-    iterator = tqdm(loader, desc="timestep-diag", leave=False) if show_progress else loader
+    pbar = (
+        tqdm(total=remaining, desc="timestep-diag", leave=False)
+        if show_progress
+        else None
+    )
 
-    for lr, _hr in iterator:
+    for lr, _hr in loader:
         if remaining <= 0:
             break
         take = min(lr.shape[0], remaining)
@@ -189,6 +190,11 @@ def run_timestep_diagnostic(
         acc.mark_images(take)
         remaining -= take
         next_index += take
+        if pbar is not None:
+            pbar.update(take)
+
+    if pbar is not None:
+        pbar.close()
 
     curves = {key: acc.mean_std(key) for key in keys}
     rows = _rows_from_curves(num_t, acc.n, curves)
