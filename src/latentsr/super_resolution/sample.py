@@ -1,4 +1,4 @@
-"""Conditional reverse sampling in latent space (Phase 8/9)."""
+"""Conditional reverse sampling in latent space."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ from collections.abc import Sequence
 
 import torch
 from tqdm.auto import tqdm
+
+from generative_models.ddpm import NoiseScheduler
 
 from latentsr.super_resolution.condition import ConditionalLatentDDPM
 from latentsr.vae.latent import decode_scaled
@@ -48,6 +50,27 @@ def seeded_noise_like(
         )
         chunks.append(torch.randn(spatial, generator=generator, dtype=torch.float32))
     return torch.stack(chunks, dim=0).to(device=reference.device, dtype=reference.dtype)
+
+
+def predict_x0_from_eps(
+    scheduler: NoiseScheduler,
+    x_t: torch.Tensor,
+    t: torch.Tensor,
+    eps_hat: torch.Tensor,
+) -> torch.Tensor:
+    """Closed-form ε-prediction x0 (no clamp; latents are unbounded).
+
+        ẑ0 = (x_t − √(1−ᾱ_t) ε̂) / √ᾱ_t
+    """
+    if eps_hat.shape != x_t.shape:
+        raise ValueError(
+            f"eps_hat shape {tuple(eps_hat.shape)} must match x_t {tuple(x_t.shape)}"
+        )
+    sqrt_ab = scheduler._extract(scheduler.sqrt_alphas_cumprod, t, x_t.shape)
+    sqrt_omb = scheduler._extract(
+        scheduler.sqrt_one_minus_alphas_cumprod, t, x_t.shape
+    )
+    return (x_t - sqrt_omb * eps_hat) / sqrt_ab
 
 
 @torch.no_grad()

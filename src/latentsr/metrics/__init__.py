@@ -21,6 +21,7 @@ from latentsr.metrics.paired_stats import (
     sign_flip_permutation_pvalue,
     spearman_rho,
 )
+from latentsr.metrics.timestep_diagnostic import run_timestep_diagnostic
 
 __all__ = [
     "LPIPSMetric",
@@ -35,6 +36,7 @@ __all__ = [
     "format_metric_table",
     "frequency_band_error",
     "psnr",
+    "run_timestep_diagnostic",
     "sign_flip_permutation_pvalue",
     "spearman_rho",
     "ssim",

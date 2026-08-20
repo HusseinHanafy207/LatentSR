@@ -17,6 +17,7 @@ from latentsr.super_resolution.inference import (
 )
 from latentsr.super_resolution.sample import (
     image_noise_seed,
+    predict_x0_from_eps,
     sample_conditional_latents,
     sample_sr_images,
     seeded_noise_like,
@@ -34,6 +35,7 @@ __all__ = [
     "load_sr_components",
     "prepare_lr_batch",
     "image_noise_seed",
+    "predict_x0_from_eps",
     "sample_conditional_latents",
     "sample_sr_images",
     "seeded_noise_like",
