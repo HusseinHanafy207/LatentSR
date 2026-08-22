@@ -68,16 +68,24 @@ def encode_scaled(
     return mu * latent_scale
 
 
-@torch.no_grad()
 def decode_scaled(
     vae: VAE,
     z_scaled: torch.Tensor,
     latent_scale: float = 1.0,
+    *,
+    allow_grad: bool = False,
 ) -> torch.Tensor:
-    """Decode scaled latents: ``decode(z_scaled / latent_scale)``."""
+    """Decode scaled latents: ``decode(z_scaled / latent_scale)``.
+
+    Decoder weights stay frozen. Pass ``allow_grad=True`` to backprop
+    *through* the decoder (guidance), not into it.
+    """
     if latent_scale <= 0:
         raise ValueError(f"latent_scale must be > 0, got {latent_scale}")
-    return vae.decode(z_scaled / latent_scale)
+    if allow_grad:
+        return vae.decode(z_scaled / latent_scale)
+    with torch.no_grad():
+        return vae.decode(z_scaled / latent_scale)
 
 
 @torch.no_grad()

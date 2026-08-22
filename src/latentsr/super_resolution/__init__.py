@@ -15,6 +15,14 @@ from latentsr.super_resolution.inference import (
     soft_decode_from_lr,
     super_resolve,
 )
+from latentsr.super_resolution.guidance import (
+    BASELINE_WINDOW,
+    EARLY_WINDOW,
+    LATE_WINDOW,
+    GuidanceWindow,
+    cache_soft_decodes,
+    sample_guided_latents,
+)
 from latentsr.super_resolution.sample import (
     image_noise_seed,
     predict_x0_from_eps,
@@ -26,10 +34,15 @@ from latentsr.super_resolution.trainer import LatentSRTrainer
 
 __all__ = [
     "AdaGNLatentUNet",
+    "BASELINE_WINDOW",
+    "EARLY_WINDOW",
+    "LATE_WINDOW",
     "ConditionedLatentUNet",
     "ConditionalLatentDDPM",
+    "GuidanceWindow",
     "LatentSRTrainer",
     "build_conditioned_latent_ddpm_from_config",
+    "cache_soft_decodes",
     "encode_lr_latents",
     "load_conditioned_latent_ddpm_checkpoint",
     "load_sr_components",
@@ -37,6 +50,7 @@ __all__ = [
     "image_noise_seed",
     "predict_x0_from_eps",
     "sample_conditional_latents",
+    "sample_guided_latents",
     "sample_sr_images",
     "seeded_noise_like",
     "save_sr_comparison_grid",

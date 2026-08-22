@@ -17,6 +17,7 @@ from latentsr.vae.vae import VAE
 _SEED_MOD = 2**31 - 1
 # Distinct from the x_T salt (0) so t=0 cannot collide with the initial draw.
 _STEP_SALT = 10_007
+STEP_SALT = _STEP_SALT
 
 
 def image_noise_seed(base_seed: int, val_index: int, *, salt: int = 0) -> int:

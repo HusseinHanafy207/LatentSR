@@ -2,6 +2,11 @@
 
 from latentsr.metrics.evaluate_sr import evaluate_sr
 from latentsr.metrics.evaluate_vae import evaluate_vae, format_bottleneck_note
+from latentsr.metrics.guidance_eval import (
+    PRE_REGISTERED,
+    REFERENCE_BANNER,
+    run_guidance_condition,
+)
 from latentsr.metrics.image_metrics import (
     LPIPSMetric,
     batch_metrics,
@@ -36,7 +41,10 @@ __all__ = [
     "format_bottleneck_note",
     "format_metric_table",
     "frequency_band_error",
+    "PRE_REGISTERED",
+    "REFERENCE_BANNER",
     "psnr",
+    "run_guidance_condition",
     "run_timestep_diagnostic",
     "run_z0_recon_diagnostic",
     "sign_flip_permutation_pvalue",

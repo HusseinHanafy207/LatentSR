@@ -66,6 +66,24 @@ def _synthetic_rows(offset: float) -> list[dict]:
     return rows
 
 
+def test_load_per_image_keeps_condition_string(tmp_path: Path) -> None:
+    path = tmp_path / "guided.csv"
+    write_per_image_csv(
+        path,
+        [
+            {
+                "val_index": 0,
+                "filename": "000000.jpg",
+                "condition": "early",
+                "latentsr_psnr": 26.5,
+            }
+        ],
+    )
+    rows = load_per_image_csv(path)
+    assert rows[0]["condition"] == "early"
+    assert rows[0]["latentsr_psnr"] == pytest.approx(26.5)
+
+
 def test_compare_per_image_and_outputs(tmp_path: Path) -> None:
     baseline_path = tmp_path / "base.csv"
     candidate_path = tmp_path / "cand.csv"

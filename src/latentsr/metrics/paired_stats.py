@@ -1,4 +1,4 @@
-"""Paired permutation tests, bootstrap CIs, and Q2 transfer scatters."""
+"""Paired permutation tests and bootstrap CIs"""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def load_per_image_csv(path: str | Path) -> dict[int, dict[str, Any]]:
                 if value is None or value == "":
                     parsed[key] = None
                     continue
-                if key == "filename":
+                if key in {"filename", "condition"}:
                     parsed[key] = value
                     continue
                 parsed[key] = float(value)
