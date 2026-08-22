@@ -4,8 +4,8 @@ Do not run this until guidance_sanity.py has a λ_g with R(t) in ~0.1–0.5.
 
   python scripts/evaluate_guidance.py \\
     --config configs/eval_sr.yaml \\
-    --sr-checkpoint PATH_Q2_CONCAT \\
-    --vae-checkpoint PATH_VAE_SR \\
+    --sr-checkpoint /kaggle/working/artifacts/latent_sr_q2/latest.pt \\
+    --vae-checkpoint /kaggle/working/outputs/vae_sr/checkpoints/latest.pt \\
     --condition early \\
     --lambda-g 0.1 \\
     --output-dir /kaggle/working/outputs/eval_guidance_early \\

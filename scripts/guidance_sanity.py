@@ -4,8 +4,8 @@ Held-out images start at val_index 64 so they are NOT the eval 64.
 
   python scripts/guidance_sanity.py \\
     --config configs/eval_sr.yaml \\
-    --sr-checkpoint PATH_Q2_CONCAT \\
-    --vae-checkpoint PATH_VAE_SR \\
+    --sr-checkpoint /kaggle/working/artifacts/latent_sr_q2/latest.pt \\
+    --vae-checkpoint /kaggle/working/outputs/vae_sr/checkpoints/latest.pt \\
     --output-dir /kaggle/working/outputs/eval_guidance_sanity \\
     --device cuda --no-download
 """
