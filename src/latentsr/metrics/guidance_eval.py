@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -114,6 +115,102 @@ REFERENCE_BANNER = (
     f"{SOFT_DECODE_LPIPS_REF:.3f}  |  unguided LatentSR {UNGUIDED_PSNR_REF:.2f} / "
     f"{UNGUIDED_LPIPS_REF:.4f}"
 )
+
+CONFIRMATION_N256 = """
+N=256 confirmation (pre-registered BEFORE looking at n=256 numbers)
+---------------------------------------------------------------------
+N=256 = val_index 0..255, seed=42, late window t<=500, guide_every=1.
+Conditions: baseline λ=0, late λ=50, late λ=200, late λ=800.
+Same checkpoints, same per-image noise as n=64.
+
+Survives if ALL of:
+  (a) >=90% of images have ΔPSNR>0 at each of λ=50, 200, 800
+  (b) mean ΔLPIPS: λ=50 < λ=200 < λ=800; λ=800 worse than unguided;
+      λ=50 not worse than unguided (do not require λ=50 LPIPS CI to exclude 0)
+  (c) ΔPSNR CIs exclude 0 at all three λ (10k perm). Point estimates may drift.
+
+First line: PSNR(D(z_lr), HR) on val_index 0..63 must still be ~28.48.
+Do not peek at partial n and stop/extend. No new λ, no training.
+""".strip()
+
+_SCORE_METHODS = ("bicubic", "soft_decode", "latentsr")
+_SCORE_METRICS = (
+    "psnr",
+    "ssim",
+    "edge_mae",
+    "freq_low",
+    "freq_mid",
+    "freq_high",
+    "lpips",
+)
+
+
+def _atomic_write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    write_per_image_csv(tmp, rows)
+    tmp.replace(path)
+
+
+def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
+    path = Path(path)
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    with path.open(newline="", encoding="utf-8") as file:
+        return list(csv.DictReader(file))
+
+
+def _row_val_index(row: dict[str, Any]) -> int:
+    return int(row["val_index"])
+
+
+def accumulate_scores_from_rows(
+    rows: list[dict[str, Any]],
+    scores: dict[str, dict[str, list[float]]],
+) -> None:
+    for row in rows:
+        for method in _SCORE_METHODS:
+            for metric in _SCORE_METRICS:
+                key = f"{method}_{metric}"
+                value = row.get(key)
+                if value is None or value == "":
+                    continue
+                scores[method][metric].append(float(value))
+
+
+def soft_decode_psnr_mean(rows: list[dict[str, Any]]) -> float | None:
+    vals = [
+        float(row["soft_decode_psnr"])
+        for row in rows
+        if row.get("soft_decode_psnr") not in (None, "")
+    ]
+    if not vals:
+        return None
+    return sum(vals) / len(vals)
+
+
+def load_guidance_checkpoint(
+    output_dir: Path,
+    *,
+    start_index: int,
+    num_images: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[int]]:
+    """Load completed rows in ``[start_index, start_index+num_images)``."""
+    lo = int(start_index)
+    hi = lo + max(int(num_images), 0)
+    per_image = [
+        row
+        for row in _load_csv_rows(Path(output_dir) / "per_image.csv")
+        if lo <= _row_val_index(row) < hi
+    ]
+    done = {_row_val_index(row) for row in per_image}
+    traj = [
+        row
+        for row in _load_csv_rows(Path(output_dir) / "trajectory.csv")
+        if _row_val_index(row) in done
+    ]
+    per_image.sort(key=_row_val_index)
+    return per_image, traj, done
 
 
 def windows_for_name(name: str, *, every: int = 1) -> GuidanceWindow:
@@ -300,8 +397,14 @@ def run_guidance_condition(
     log_timesteps: tuple[int, ...] = TRAJECTORY_TIMESTEPS,
     guide_every: int = 1,
     show_progress: bool = True,
+    resume: bool = True,
+    checkpoint_every: int = 8,
 ) -> dict[str, Any]:
-    """Step 4: one condition on the eval set, with trajectory snapshots."""
+    """One condition on the eval set, with trajectory snapshots.
+
+    ``resume`` + ``checkpoint_every`` flush ``per_image.csv`` so a Kaggle
+    disconnect can continue from the last completed ``val_index``.
+    """
     window = windows_for_name(condition, every=guide_every)
     if condition == "baseline":
         lambda_g = 0.0
@@ -314,19 +417,61 @@ def run_guidance_condition(
     scores: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     per_image: list[dict[str, Any]] = []
     traj_rows: list[dict[str, Any]] = []
+    done: set[int] = set()
     grid_pack: dict[str, torch.Tensor] | None = None
     dataset = loader.dataset
     log_set = {int(t) for t in log_timesteps}
+    out_path = Path(output_dir) if output_dir is not None else None
+    if out_path is not None:
+        out_path.mkdir(parents=True, exist_ok=True)
+    if resume and out_path is not None:
+        per_image, traj_rows, done = load_guidance_checkpoint(
+            out_path, start_index=start_index, num_images=num_images
+        )
+        accumulate_scores_from_rows(per_image, scores)
+        if done:
+            print(
+                f"resume: {len(done)}/{num_images} images already in {out_path / 'per_image.csv'}",
+                flush=True,
+            )
+            mean_soft = soft_decode_psnr_mean(per_image)
+            if mean_soft is not None:
+                print(
+                    f"soft-decode PSNR (n={len(per_image)} resumed): {mean_soft:.4f}  "
+                    f"(n=64 ref {SOFT_DECODE_PSNR_REF:.2f})",
+                    flush=True,
+                )
+
+    def _flush() -> None:
+        if out_path is None or not per_image:
+            return
+        _atomic_write_csv(out_path / "per_image.csv", per_image)
+        if traj_rows:
+            _atomic_write_csv(out_path / "trajectory.csv", traj_rows)
 
     batches = list(
         iter_indexed_batches(loader, start_index=start_index, num_images=num_images)
     )
     pbar = (
-        tqdm(total=num_images, desc=f"guidance-{condition}", leave=False)
+        tqdm(
+            total=num_images,
+            desc=f"guidance-{condition}",
+            leave=False,
+            initial=len(done),
+        )
         if show_progress
         else None
     )
+    since_flush = 0
+    printed_first_soft = bool(per_image)
     for lr, hr, indices in batches:
+        keep = [i for i, idx in enumerate(indices) if int(idx) not in done]
+        if not keep:
+            continue
+        if len(keep) != len(indices):
+            lr = lr[keep]
+            hr = hr[keep]
+            indices = [indices[i] for i in keep]
         lr = lr.to(device)
         hr = hr.to(device)
         z_lr, d_zlr = cache_soft_decodes(
@@ -404,6 +549,16 @@ def run_guidance_condition(
                     row[f"{prefix}_{key}"] = float(values[i].cpu())
             row["hr_edge_energy"] = float(hr_edge[i].cpu())
             per_image.append(row)
+            done.add(int(val_index))
+        if not printed_first_soft:
+            mean_soft = soft_decode_psnr_mean(per_image)
+            if mean_soft is not None:
+                print(
+                    f"soft-decode PSNR (n={len(per_image)}): {mean_soft:.4f}  "
+                    f"(n=64 ref {SOFT_DECODE_PSNR_REF:.2f})",
+                    flush=True,
+                )
+                printed_first_soft = True
         if grid_pack is None:
             n_grid = min(grid_images, lr.shape[0])
             grid_pack = {
@@ -412,10 +567,15 @@ def run_guidance_condition(
                 "hr": hr[:n_grid].cpu(),
                 "soft": d_zlr[:n_grid].cpu(),
             }
+        since_flush += len(indices)
         if pbar is not None:
             pbar.update(len(indices))
+        if checkpoint_every > 0 and since_flush >= checkpoint_every:
+            _flush()
+            since_flush = 0
     if pbar is not None:
         pbar.close()
+    _flush()
 
     summary = {
         method: {metric: summarize_values(vals) for metric, vals in metric_map.items()}
@@ -438,20 +598,26 @@ def run_guidance_condition(
         "reference": REFERENCE_BANNER,
         "pre_registered": PRE_REGISTERED,
     }
-    if output_dir is not None and grid_pack is not None:
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+    mean_soft = soft_decode_psnr_mean(per_image)
+    if mean_soft is not None:
+        print(
+            f"soft-decode PSNR (n={len(per_image)}): {mean_soft:.4f}  "
+            f"(n=64 ref {SOFT_DECODE_PSNR_REF:.2f})",
+            flush=True,
+        )
+        result["soft_decode_psnr_mean"] = mean_soft
+    if out_path is not None and grid_pack is not None:
         save_sr_comparison_grid(
             grid_pack["lr"],
             grid_pack["pred"],
             hr=grid_pack["hr"],
-            output_path=output_dir / "eval_compare.png",
+            output_path=out_path / "eval_compare.png",
             hr_size=hr_size,
             include_soft_decode=True,
             soft=grid_pack["soft"],
         )
         write_summary_files(
-            output_dir,
+            out_path,
             summary,
             result["num_images"],
             extra={
@@ -461,15 +627,30 @@ def run_guidance_condition(
                 "guidance_convention": "dps_z_t_grad_applied_to_z_tm1",
                 "guide_every": int(guide_every),
                 "lr_size": int(lr_size),
+                "start_index": int(start_index),
             },
         )
-        write_per_image_csv(output_dir / "per_image.csv", per_image)
-        if traj_rows:
-            write_per_image_csv(output_dir / "trajectory.csv", traj_rows)
-        (output_dir / "protocol.txt").write_text(
-            REFERENCE_BANNER + "\n\n" + PRE_REGISTERED + "\n", encoding="utf-8"
+        (out_path / "protocol.txt").write_text(
+            REFERENCE_BANNER + "\n\n" + PRE_REGISTERED + "\n\n" + CONFIRMATION_N256 + "\n",
+            encoding="utf-8",
         )
-        result["output_dir"] = str(output_dir)
+        result["output_dir"] = str(out_path)
+    elif out_path is not None and per_image:
+        write_summary_files(
+            out_path,
+            summary,
+            result["num_images"],
+            extra={
+                "condition": condition,
+                "lambda_g": float(lambda_g),
+                "noise_seed": int(noise_seed),
+                "guidance_convention": "dps_z_t_grad_applied_to_z_tm1",
+                "guide_every": int(guide_every),
+                "lr_size": int(lr_size),
+                "start_index": int(start_index),
+            },
+        )
+        result["output_dir"] = str(out_path)
     return result
 
 

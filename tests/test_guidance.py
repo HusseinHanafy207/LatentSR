@@ -188,6 +188,57 @@ def test_correction_equals_lambda_times_grad() -> None:
     assert torch.allclose(extras["grad_norm"], extras_on["grad_norm"], atol=1e-6)
 
 
+def test_guidance_checkpoint_roundtrip(tmp_path) -> None:
+    from latentsr.metrics.guidance_eval import (
+        accumulate_scores_from_rows,
+        load_guidance_checkpoint,
+        soft_decode_psnr_mean,
+    )
+    from latentsr.metrics.image_metrics import write_per_image_csv
+
+    rows = [
+        {
+            "val_index": 0,
+            "filename": "a.jpg",
+            "condition": "late",
+            "lambda_g": 200.0,
+            "soft_decode_psnr": 28.48,
+            "latentsr_psnr": 27.6,
+            "latentsr_lpips": 0.069,
+        },
+        {
+            "val_index": 3,
+            "filename": "b.jpg",
+            "condition": "late",
+            "lambda_g": 200.0,
+            "soft_decode_psnr": 28.50,
+            "latentsr_psnr": 27.7,
+            "latentsr_lpips": 0.070,
+        },
+    ]
+    write_per_image_csv(tmp_path / "per_image.csv", rows)
+    write_per_image_csv(
+        tmp_path / "trajectory.csv",
+        [
+            {"val_index": 0, "t": 500, "R": 0.04},
+            {"val_index": 9, "t": 500, "R": 0.05},
+        ],
+    )
+    loaded, traj, done = load_guidance_checkpoint(
+        tmp_path, start_index=0, num_images=4
+    )
+    assert done == {0, 3}
+    assert [int(r["val_index"]) for r in loaded] == [0, 3]
+    assert len(traj) == 1
+    assert int(traj[0]["val_index"]) == 0
+    scores: dict = {"soft_decode": {"psnr": []}, "latentsr": {"psnr": [], "lpips": []}}
+    accumulate_scores_from_rows(loaded, scores)
+    assert scores["soft_decode"]["psnr"] == [28.48, 28.50]
+    mean_soft = soft_decode_psnr_mean(loaded)
+    assert mean_soft is not None
+    assert abs(mean_soft - 28.49) < 1e-9
+
+
 def test_recommend_lambda_prefers_in_band() -> None:
     from latentsr.metrics.guidance_eval import recommend_lambda_g
 

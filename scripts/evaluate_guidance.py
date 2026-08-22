@@ -1,15 +1,13 @@
-"""Stage 1 Step 4: baseline / early / late guidance on the eval 64.
-
-Do not run this until guidance_sanity.py has a λ_g with R(t) in ~0.1–0.5.
+"""Stage 1/2 guidance eval. N=256 confirmation: start_index=0, resume on.
 
   python scripts/evaluate_guidance.py \\
     --config configs/eval_sr.yaml \\
     --sr-checkpoint /kaggle/working/artifacts/latent_sr_q2/latest.pt \\
     --vae-checkpoint /kaggle/working/outputs/vae_sr/checkpoints/latest.pt \\
-    --condition early \\
-    --lambda-g 0.1 \\
-    --output-dir /kaggle/working/outputs/eval_guidance_early \\
-    --seed 42 --num-images 64 --device cuda --no-download
+    --condition late --lambda-g 200 \\
+    --output-dir /kaggle/working/outputs/eval_guidance_n256_late_l200 \\
+    --seed 42 --num-images 256 --start-index 0 --batch-size 1 \\
+    --device cuda --no-download --resume --checkpoint-every 8
 """
 
 from __future__ import annotations
@@ -21,8 +19,10 @@ import torch
 
 from latentsr.datasets.sr_pairs import get_sr_pair_dataloaders
 from latentsr.metrics.guidance_eval import (
+    CONFIRMATION_N256,
     PRE_REGISTERED,
     REFERENCE_BANNER,
+    check_soft_decode_cache,
     compare_guidance_conditions,
     run_guidance_condition,
 )
@@ -58,6 +58,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--compare-baseline", type=Path, default=None)
     parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip val_index already in output-dir/per_image.csv (default on).",
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=8,
+        help="Flush per_image.csv every N new images. 0 disables mid-run writes.",
+    )
+    parser.add_argument(
+        "--skip-soft-check",
+        action="store_true",
+        help="Skip the n=64 soft-decode PSNR gate (do not use on the confirmation run).",
+    )
+    parser.add_argument(
         "--download",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -75,6 +92,9 @@ def main() -> None:
     print()
     print(PRE_REGISTERED)
     print()
+    if int(args.num_images) >= 256:
+        print(CONFIRMATION_N256)
+        print()
 
     if args.condition != "baseline" and args.lambda_g is None:
         raise SystemExit("--lambda-g is required for early/late (choose from Step 2, not from PSNR).")
@@ -112,6 +132,29 @@ def main() -> None:
         download=args.download,
     )
 
+    if int(args.start_index) == 0 and not args.skip_soft_check:
+        n_check = min(64, int(args.num_images))
+        soft = check_soft_decode_cache(
+            vae,
+            val_loader,
+            device=device,
+            num_images=n_check,
+            start_index=0,
+            hr_size=hr_size,
+            latent_scale=latent_scale,
+        )
+        print(
+            f"soft-decode PSNR (n={n_check}, val_index 0..{n_check - 1}): "
+            f"{soft['mean']:.4f}  expected {soft['expected']:.2f}  "
+            f"abs_error={soft['abs_error']:.4f}  ok={soft['ok']}",
+            flush=True,
+        )
+        if not soft["ok"]:
+            raise SystemExit(
+                "soft-decode PSNR on the locked first 64 does not match 28.48. "
+                "Stop — VAE checkpoint or latent scale is wrong."
+            )
+
     result = run_guidance_condition(
         model,
         vae,
@@ -130,6 +173,8 @@ def main() -> None:
         output_dir=output_dir,
         guide_every=int(args.guide_every),
         show_progress=True,
+        resume=bool(args.resume),
+        checkpoint_every=int(args.checkpoint_every),
     )
     print()
     print(result["table"])
