@@ -1,0 +1,64 @@
+\documentclass{article}
+
+% Named technical report (not an anonymous NeurIPS submission).
+% On Overleaf: if the official NeurIPS 2024 template is used, keep *their*
+% neurips_2024.sty and delete the local copy if they conflict.
+\usepackage[preprint]{neurips_2024}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{microtype}
+
+\usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black
+}
+
+\input{macros}
+
+\title{When Does Better Conditioning Help?\\
+Representation, Injection, and Sampling-Time Guidance\\
+in Latent Diffusion Super-Resolution}
+
+\author{%
+  Hussein Hamouda \\
+  Purdue University \\
+  \texttt{hanafy@purdue.edu}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\input{sections/00_abstract}
+\end{abstract}
+
+\input{sections/01_intro}
+\input{sections/02_setup}
+\input{sections/03_related}
+\input{sections/04_method}
+\input{sections/05_experiments}
+\input{sections/06_discussion}
+
+\section*{Code availability}
+Training and evaluation code, configs, and the experiment log are at
+\url{https://github.com/HusseinHanafy207/LatentSR}.
+Paired checkpoints used in this report are at
+\url{https://huggingface.co/HusseinHamouda/LatentSR-checkpoints}.
+
+\bibliography{refs}
+
+\end{document}

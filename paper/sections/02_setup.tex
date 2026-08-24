@@ -1,0 +1,263 @@
+\section{Problem setup and pipeline}
+\label{sec:setup}
+
+This section fixes notation, the two decode jobs, the data and
+denoiser, and the evaluation protocol used by every later table.
+Method variants (\vaeone{} vs.\ \vaesr, concat vs.\ FiLM, guidance)
+are defined in~\S\ref{sec:setup}--\S\ref{sec:setup-hygiene} only as
+\emph{interfaces}; training losses and ablations come in subsequent
+sections.
+
+\subsection{Task and notation}
+\label{sec:notation}
+
+Let $\xhr\in\Rbb^{3\times 128\times 128}$ be an HR RGB face and
+$\xlr\in\Rbb^{3\times 32\times 32}$ its $4\times$ bicubic
+downsample.
+Write $\xup$ for bicubic upsample of $\xlr$ back to $128\times 128$.
+A convolutional VAE provides an encoder--decoder pair
+$(\Enc,\Dec)$ with spatial latent shape $(4,32,32)$ (downsample
+factor~$4$).
+The encoder outputs a diagonal Gaussian
+$q(z\mid x)=\Ncal(\mu(x),\mathrm{diag}(\sigma^2(x)))$.
+At SR inference we freeze the VAE and use the posterior
+\emph{mean}
+\begin{equation}
+  \label{eq:latent-mean}
+  z \;=\; \mu(x),\qquad
+  z_{\mathrm{scaled}} \;=\; s\,z,\qquad
+  \Dec_{\mathrm{scaled}}(z) \;=\; \Dec(z/s),
+\end{equation}
+with $s{=}1$ throughout (a scale $1/\mathrm{std}(\mu_{\mathrm{hr}})\approx 1.065$
+was estimated and \emph{not} applied).
+
+The diffusion model is a DDPM~\citep{ho2020denoising} on the HR
+latent $\zhr=\Enc(\xhr)$, with $T{=}1000$ steps and a linear
+schedule $\beta_t\in[10^{-4},0.02]$.
+We write $\abart=\prod_{s=1}^{t}\alpha_s$ in the usual way.
+The UNet predicts noise $\epshat_\theta(\zt,\zlr,t)$.
+The predicted clean latent is
+\begin{equation}
+  \label{eq:z0hat}
+  \zhat(t)
+  \;=\;
+  \frac{\zt - \sqrt{1-\abart}\,\epshat_\theta(\zt,\zlr,t)}{\sqrt{\abart}}.
+\end{equation}
+Reverse sampling uses the standard DDPM posterior step
+$p(z_{t-1}\mid \zt,\epshat)$.
+The SR output is $\zsr\approx z_0$ after $t{=}0$, decoded as
+$\Dec(\zsr)$.
+
+\paragraph{Two decodes.}
+\Cref{tab:two-jobs} is the wording constraint for the rest of the
+paper.
+Soft-decode reconstructs the \emph{condition}.
+\lsrmethod{} samples an HR latent.
+We never say that the DDPM ``overwrites a better reconstruction.''
+
+\begin{table}[htbp]
+  \centering
+  \caption{Two jobs that share $\Dec$ but not an objective.}
+  \label{tab:two-jobs}
+  \small
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{\columnwidth}{@{}
+      >{\raggedright\arraybackslash}p{1.55cm}
+      >{\raggedright\arraybackslash}X
+      >{\raggedright\arraybackslash}X@{}}
+    \toprule
+    Name & Definition & Question \\
+    \midrule
+    Soft-decode &
+      $\Dec(\zlr)=\Dec(\Enc(\xup))$ &
+      What HR-looking information is already in $\zlr$? \\
+    \lsrmethod{} &
+      $\Dec(\zsr)$, $\zsr\sim p(\zhr\mid\zlr)$ &
+      How much of that information does the sampler use? \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Data, architecture, and training constants}
+\label{sec:data}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Locked experimental constants. Changing any row without
+  a paired re-eval invalidates a comparison.}
+  \label{tab:constants}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabularx}{\columnwidth}{@{}lX@{}}
+    \toprule
+    Item & Value \\
+    \midrule
+    Dataset & CelebA, center-crop $178$, then resize \\
+    HR / LR & $128\times 128$ / $32\times 32$ ($4\times$ bicubic) \\
+    Valid split & official; eval in file order, $\texttt{shuffle=False}$ \\
+    Valid size & $\approx 19{,}867$ (full val never run) \\
+    Seed & $42$; $x_T$ and every reverse-step noise seeded per \texttt{val\_index} \\
+    VAE & conv.\ $\beta$-VAE, base channels $64$, \texttt{channel\_mult}$=[1,2,4]$, $2$ resblocks \\
+    Latent & $(4,32,32)$, $s{=}1$ \\
+    DDPM & $T{=}1000$, $\beta\in[10^{-4},0.02]$, Adam $2{\times}10^{-4}$ \\
+    UNet & same skeleton as the VAE width, attn.\ at $16$ and $8$ \\
+    Concat DDPM & $50$ epochs, batch $64$ \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\Cref{tab:constants} lists the constants that never change across
+the causal chain.
+CelebA faces keep the problem in a well-understood, aligned domain;
+the point is isolation, not real-world degradation modeling.
+The denoiser is the project's own latent UNet
+(\texttt{generative\_models.ddpm}), not a pretrained Stable Diffusion
+backbone, so representation, injection, and sampling effects are not
+confounded with a frozen billion-parameter prior.
+
+\subsection{Pipeline}
+\label{sec:pipeline}
+
+\Cref{fig:pipeline} is the system at inference.
+HR and LR share one frozen encoder.
+The denoiser never sees pixels: it sees $\zt$ and $\zlr$ only.
+Conditioning is either channel concat
+\begin{equation}
+  \label{eq:concat}
+  \epshat_\theta(\zt,\zlr,t)
+  \;=\;
+  \mathrm{UNet}\bigl([\zt \,\Vert\, \zlr],\, t\bigr)
+\end{equation}
+($8$ input channels, $4$ output channels) or spatial FiLM at every
+UNet scale (defined when that experiment is introduced).
+Guidance, when used, does not change~\eqref{eq:concat}: it adds a
+decoder-side correction after the unguided posterior step
+(\S\ref{sec:method-guide}).
+
+\begin{figure*}[t]
+  \centering
+  \resizebox{0.98\textwidth}{!}{%
+  \begin{tikzpicture}[
+      font=\scriptsize,
+      blk/.style={draw, rounded corners=1.5pt, align=center,
+                  inner sep=3.5pt, minimum height=9.5mm, anchor=center},
+      lab/.style={font=\scriptsize\itshape, text=black!60},
+      arr/.style={-{Latex}, thick, shorten >=1pt, shorten <=1pt}
+    ]
+    \matrix[
+      ampersand replacement=\&,
+      column sep=3.6mm,
+      row sep=1.35cm,
+      cells={anchor=center, inner sep=0pt}
+    ] {
+      \node[blk, fill=gray!12] (xhr) {$\xhr$\\$128{\times}128$}; \&
+      \node[blk, fill=blue!10] (ehr) {$\Enc$}; \&
+      \node[blk, fill=blue!10] (zhr) {$\zhr=\mu_{\mathrm{hr}}$\\$4{\times}32{\times}32$}; \&
+      \node[blk, fill=orange!12] (fwd) {$q(\zt\mid\zhr)$}; \&
+      \node[blk, fill=green!12] (unet) {UNet\\$\epshat_\theta$}; \&
+      \node[blk, fill=green!12] (rev) {reverse\\$T{=}1000$}; \&
+      \node[blk, fill=blue!10] (zsr) {$\zsr\approx z_0$}; \&
+      \node[blk, fill=blue!10] (dec) {$\Dec$}; \&
+      \node[blk, fill=gray!12] (out) {$\hat x_{\mathrm{hr}}$}; \\
+      \node[blk, fill=gray!12] (xlr) {$\xlr$\\$32{\times}32$}; \&
+      \node[blk, fill=gray!12] (up) {bicubic $\uparrow$\\$\xup$}; \&
+      \node[blk, fill=blue!10] (elr) {$\Enc$\\(frozen)}; \&
+      \node[blk, fill=blue!10] (zlr) {$\zlr=\mu_{\mathrm{lr}}$}; \&
+      \node[blk, fill=yellow!25] (cond) {concat $[\zt\Vert\zlr]$\\or FiLM$(\zlr)$}; \\
+    };
+
+    \draw[arr] (xhr) -- (ehr);
+    \draw[arr] (ehr) -- (zhr);
+    \draw[arr] (zhr) -- (fwd);
+    \draw[arr] (fwd) -- (unet);
+    \draw[arr] (unet) -- (rev);
+    \draw[arr] (rev) -- (zsr);
+    \draw[arr] (zsr) -- (dec);
+    \draw[arr] (dec) -- (out);
+
+    \draw[arr] (xhr) -- node[left, lab] {$4\times\downarrow$} (xlr);
+    \draw[arr] (xlr) -- (up);
+    \draw[arr] (up) -- (elr);
+    \draw[arr] (elr) -- (zlr);
+    \draw[arr] (zlr) -- (cond);
+    % Conditioning enters the UNet from below (not a leftward hook).
+    \draw[arr] (cond.north) -- (unet.south);
+
+    \node[lab, below=0.18cm of cond] {condition only; no pixel skip into UNet};
+    \node[lab, above=0.12cm of xhr] {HR autoencoding path};
+    \node[lab, below=0.12cm of xlr] {LR conditioning path};
+  \end{tikzpicture}%
+  }
+  \caption{LatentSR inference pipeline (every stage that later tables
+  refer to).
+  Blue: frozen VAE.
+  Orange: forward diffusion on $\zhr$ (training) / noise at $t{=}T$ (eval).
+  Green: concat or FiLM denoiser.
+  Yellow: the only place the LR code enters the UNet.
+  Soft-decode is $\Dec(\zlr)$ and never uses the green path.
+  \lsrmethod{} is $\Dec(\zsr)$.}
+  \label{fig:pipeline}
+\end{figure*}
+
+\subsection{Evaluation protocol}
+\label{sec:eval}
+
+Every paired claim uses the same $N$ CelebA validation images in file
+order, seed~$42$, and reverse-process noise drawn as a function of
+\texttt{val\_index}.
+Two checkpoints are therefore comparable even if batch size differs.
+Primary metrics are PSNR (distortion) and LPIPS-Alex
+\citep{zhang2018unreasonable} (perception).
+SSIM and Sobel edge MAE are secondary.
+Paired tests: $\Delta$ is candidate minus baseline on matched
+indices; sign-flip permutation $n_{\mathrm{perm}}{=}10^{4}$;
+percentile bootstrap $95\%$ CI $n_{\mathrm{boot}}{=}10^{4}$.
+We declare a mean $\Delta$ real when the CI excludes $0$.
+
+\paragraph{Number hygiene.}
+VAE, concat, FiLM, timestep, and $\zhat$-image diagnostics are
+reported at $\mathbf{n{=}64}$.
+The guidance \emph{dose} that we treat as confirmatory is
+$\mathbf{n{=}256}$ (\texttt{val\_index} $0..255$), pre-registered
+before looking at those numbers.
+We never pool the two $n$ in one mean.
+Full validation ($\approx 19{,}867$) is not computationally feasible
+at $\approx 21$\,s/image for guided reverse sampling.
+
+\subsection{Checkpoint pairing and hygiene}
+\label{sec:setup-hygiene}
+
+Three frozen VAEs / DDPMs are easy to mix because several artifacts
+are named \texttt{latest.pt}.
+\Cref{tab:ckpts} is the pairing used in every later section.
+Guidance is always Q2 concat epoch-$50$ \emph{with} \vaesr{}
+epoch-$20$.
+Phase-8 concat (trained on \vaeone) and the FiLM checkpoint are
+never used for guidance.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Checkpoint pairing used in every later section.}
+  \label{tab:ckpts}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabularx}{\columnwidth}{@{}lXX@{}}
+    \toprule
+    Name & Frozen VAE & Role \\
+    \midrule
+    \vaeone{} & recon.\ VAE, epoch $50$ & representation baseline \\
+    \vaesr{} & $20$-epoch align fine-tune & representation test \\
+    Phase-8 concat & \vaeone{} & not for guidance \\
+    Q2 concat & \vaesr{} & transfer + guidance pair \\
+    FiLM Q2 & \vaesr{} & injection test only \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\paragraph{Citation hygiene.}
+On $2026$-$08$-$19$ a related-work list named a paper as
+``PGSR --- When Latents Forget Pixels ($2026$)'' without authors,
+arXiv ID, venue, or DOI.
+The acronym collides with planar-based Gaussian splatting; a
+circulating code URL did not check out as that SR paper.
+We exclude it: a title-plus-year string is not a citation.

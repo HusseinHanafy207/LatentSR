@@ -2,9 +2,9 @@
 
 Reads the local eval CSVs (no re-sampling) and writes
 
-    figures/a_representation.{png,pdf}
-    figures/b_reverse_chain.{png,pdf}
-    figures/c_late_dose.{png,pdf}
+    paper/figures/fig_a_representation.{png,pdf}
+    paper/figures/fig_b_reverse_chain.{png,pdf}
+    paper/figures/fig_c_late_dose.{png,pdf}
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import numpy as np
 from matplotlib.lines import Line2D
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "figures"
+OUT = ROOT / "paper" / "figures"
 OUT.mkdir(parents=True, exist_ok=True)
 
 SOFT_PSNR = (26.15, 28.48)
@@ -119,8 +119,9 @@ def _vae_handles() -> list[Line2D]:
 
 
 def _save(fig: plt.Figure, stem: str) -> None:
-    png = OUT / f"{stem}.png"
-    pdf = OUT / f"{stem}.pdf"
+    name = stem if stem.startswith("fig_") else f"fig_{stem}"
+    png = OUT / f"{name}.png"
+    pdf = OUT / f"{name}.pdf"
     fig.savefig(png, dpi=300)
     fig.savefig(pdf)
     plt.close(fig)

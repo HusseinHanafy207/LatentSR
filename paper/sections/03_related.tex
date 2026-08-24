@@ -1,0 +1,88 @@
+\section{Related work}
+\label{sec:related}
+
+We group prior work by the three links we ablate---how $\zlr$ is
+\emph{represented}, how it is \emph{injected} into a denoiser, and
+how sampling can be \emph{steered} back toward the LR
+observation---and then state what is \emph{not} claimed.
+
+\subsection{Latent diffusion and generative SR}
+Denoising diffusion~\citep{ho2020denoising} produces high-quality
+images by reversing a Gaussian noising process.
+Latent diffusion~\citep{rombach2022high} moves that process into the
+code of a convolutional VAE~\citep{kingma2014auto}, which is the
+template for \lsrmethod{}: encode, denoise, decode.
+Pixel-space iterative SR~\citep{saharia2023image} showed that a
+conditional DDPM can outperform regression on perceptual metrics;
+subsequent systems adapt large pretrained latent priors for
+restoration, including StableSR~\citep{wang2024exploiting},
+DiffBIR~\citep{lin2024diffbir}, and
+SeeSR~\citep{wu2024seesr}.
+Those methods are engineering stacks (ControlNet branches, semantic
+prompts, degradation-aware encoders) on frozen billion-parameter
+backbones.
+Our denoiser is a small latent UNet trained from scratch on
+CelebA~\citep{liu2015faceattributes}, on purpose:
+representation, injection, and sampling can be swapped without
+confounding a pretrained generative prior.
+
+The perception--distortion trade-off~\citep{blau2018perception} is
+the right backdrop for every SR table below.
+LPIPS~\citep{zhang2018unreasonable} tracks the perceptual axis;
+PSNR tracks distortion.
+A method can win LPIPS while losing PSNR, and a soft-decode that
+looks closer to HR than the sampler's output is not a bug in the
+metrics.
+
+\subsection{Representations for restoration}
+A reconstruction VAE is optimized for $\Dec(\zhr)\approx\xhr$, not
+for $\zlr$ to be a useful SR condition.
+Related restoration work often adds pixel-space skip connections,
+second encoders, or pretrained tokenizers.
+We stay inside one frozen VAE so that ``better $\zlr$'' is a measured
+change in $\Dec(\zlr)$ and cosine$(\zlr,\zhr)$---not a new
+architecture.
+The hypothesis we test is the one implicit in much latent SR:
+if those representation metrics improve, SR metrics should follow.
+
+\subsection{How the LR code is injected}
+The default in latent SR, and our baseline, is channel concat
+$[\zt\Vert\zlr]$ at the UNet input~\citep{rombach2022high}.
+Concat is spatially aligned---our $\zlr$ is already $4\times 32\times 32$---but
+it touches only the first convolution.
+Feature-wise modulation (FiLM;~\citealp{perez2018film}) and its
+normalization cousins (AdaIN/AdaGN) inject a condition as
+$\gamma,\beta$ at many depths, the natural test of
+``concat cannot read $\zlr$ after the first conv.''
+ControlNet-style side branches~\citep{zhang2023adding} and
+cross-attention are the other common readers.
+We use neither: cross-attention would treat an already-aligned map as
+tokens, and ControlNet would add a second encoder.
+A FiLM null on the same frozen $\zlr$ is evidence against the
+weak-reader story, not a claim that FiLM never helps in other stacks.
+
+\subsection{Sampling-time guidance and prior vs.\ fidelity}
+Classifier guidance~\citep{dhariwal2021diffusion} and classifier-free
+guidance~\citep{ho2022classifier} steer a reverse process with a
+gradient or a conditional/unconditional pair.
+Diffusion posterior sampling
+(DPS;~\citealp{chung2023diffusion}) applies a measurement gradient
+through a differentiable forward model, typically to $z_{t-1}$ after
+an unguided posterior step.
+SeeSR~\citep{wu2024seesr} and DiffBIR~\citep{lin2024diffbir}
+discuss generative priors that invent plausible but unfaithful
+detail; they add semantic or restoration conditions during sampling
+or via extra trained modules.
+Our probe uses that DPS pattern with an LR-consistency measurement
+through a frozen decoder, in a pre-registered time window, with
+$\lamg$ chosen from a relative step size $R(t)$ rather than from a
+test-set sweep disguised as a method (\S\ref{sec:method-guide}).
+
+\subsection{Positioning}
+The experiment is narrow: hold the denoiser family and evaluation
+noise fixed, improve $\zlr$ by a known amount, and ask whether
+concat, then FiLM, then late-window guidance consume that gain.
+We do not claim a new conditioning architecture or reproduce
+large-prior pipelines.
+A claimed related paper could not be verified from the citation as
+given and is excluded (\S\ref{sec:setup-hygiene}).

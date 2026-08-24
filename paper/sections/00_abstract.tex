@@ -1,0 +1,27 @@
+Latent diffusion super-resolution (SR) conditions a reverse process on a
+low-resolution (LR) latent~$\zlr$.
+A natural hypothesis is that a better~$\zlr$ should yield better SR.
+We test that hypothesis under a controlled $4\times$ CelebA protocol
+($32\!\to\!128$) with matched denoisers, frozen autoencoders, and
+per-image reverse-process noise.
+An SR-aware VAE improves the LR code substantially:
+soft-decode $\Dec(\zlr)$ gains $\mathbf{+2.33}$\,dB PSNR and LPIPS
+$0.273\!\to\!0.119$ ($n{=}64$), while HR reconstruction stays at
+$\approx 37.3$\,dB.
+The same gain does \emph{not} transfer through a concat latent DDPM:
+SR PSNR moves only $\mathbf{+0.22}$\,dB and LPIPS is a null
+($\approx 0.068$); imagewise Spearman $\rho(\Delta\mathrm{soft},\Delta\mathrm{SR})\approx 0.05$.
+Replacing concat with spatial FiLM is also a null
+(PSNR $\Delta=-0.03$\,dB, CI includes~$0$).
+A timestep diagnostic localizes the failure: the SR-aware model
+becomes strongly aligned with~$\zlr$ mid-reverse (cosine $0.985$ at
+$t{=}656$) and subsequently loses this alignment as sampling
+approaches the final HR latent.
+Inference-time decoder-side LR-consistency guidance, applied in the
+late sampling window $t\le 500$ (no training), recovers
+$\mathbf{56\%}$ of the $2.08$\,dB transfer gap at $\lamg{=}200$
+($n{=}256$: $26.33\!\to\!27.50$\,dB) and slightly \emph{improves}
+LPIPS relative to the unguided baseline ($0.0720\!\to\!0.0707$).
+Our contribution is a controlled diagnosis of conditioning transfer in
+latent diffusion SR and an inference-time intervention that recovers a
+substantial fraction of the lost fidelity.

@@ -1,0 +1,94 @@
+\section{Discussion}
+\label{sec:discussion}
+
+The representation hypothesis is half right.
+An SR-aware VAE really does improve $\zlr$:
+soft-decode gains $+2.33$\,dB and LPIPS $0.273\to 0.119$ while HR
+recon stays at $37.3$\,dB (\Cref{tab:vae-only}).
+That improvement does not automatically become better SR.
+Under a matched concat DDPM the SR PSNR gain is $+0.22$\,dB, LPIPS
+is a null, and imagewise Spearman $\rho(\Delta\mathrm{soft},\Delta\mathrm{SR})\approx 0.05$
+(\Cref{tab:transfer}, \Cref{tab:paired}).
+Spatial FiLM on the same frozen \vaesr{} is also a PSNR null
+(\Cref{tab:paired}).
+The missing link is not ``the first convolution cannot read $\zlr$.''
+
+The reverse-chain diagnostic is the more useful localization.
+$\zhat(t)$ under \vaesr{} becomes strongly aligned with $\zlr$
+mid-sampling (cosine $0.985$ at $t{=}656$) and then loses that
+alignment by $t{=}0$ (\Cref{tab:cosine}, \Cref{fig:rev-chain}).
+Decoding $\zhat(t)$ is not soft-decode: absolute PSNR peaks near
+$t{=}400$, and the $t{=}0$ PSNR $\Delta$ matches the concat
+$+0.22$\,dB (\Cref{tab:z0-img}).
+We treat the late drop as an empirical fact about this reverse
+process, not as a proof that an isolated ``HR prior'' is the cause.
+
+Guidance tests that fact at inference, with no extra training.
+Early and late windows at $\lamg{=}200$ tie
+(\Cref{tab:stage1}): the finish is in $t\le 500$.
+A late dose recovers $27\%/56\%/80\%$ of the transfer gap at
+$\lamg\in\{50,200,800\}$; $\lamg{=}800$ walks LPIPS toward
+soft-decode $0.119$ (\Cref{tab:dose64}, \Cref{fig:late-dose}).
+The confirmatory table is $n{=}256$ (\Cref{tab:n256}):
+late $\lamg{=}200$ moves $26.33\to 27.50$\,dB ($56\%$ of the
+$2.08$\,dB gap) and slightly \emph{improves} LPIPS
+($0.0720\to 0.0707$).
+That is the operating point: recover a large share of the unused
+representation gain without collapsing to the soft-decode image.
+
+\paragraph{What we do not claim.}
+This is not a new SR backbone, tokenizer, or trained guidance
+network, and it is not a SOTA comparison against StableSR, SeeSR, or
+DiffBIR.
+The FiLM null is for this spatial conditioner on this frozen
+\vaesr{} code; FiLM+\vaeone{} was not trained, so we do not claim a
+VAE--conditioner interaction.
+Soft-decode $\Dec(\zlr)$ is a probe of the condition, not an SR
+method.
+We do not claim that autoencoder quality transfers to SR in general.
+
+\paragraph{Limits.}
+The protocol is $4\times$ bicubic CelebA $32\to 128$ with a small
+latent UNet trained from scratch.
+VAE, concat, FiLM, and trajectory numbers are $n{=}64$; the
+guidance dose we treat as confirmatory is $n{=}256$.
+Guidance was not uniformly helpful: one image
+(\texttt{val\_index}~$99$) had PSNR that worsened monotonically as
+$\lamg$ increased, so the intervention is not failure-proof per
+image even when the mean is strongly positive (\Cref{tab:n256}).
+Full validation ($\approx 19{,}867$ images) is not run.
+Guided sampling backpropagates through the frozen decoder at every
+guided step and costs $\approx 21$\,s/image in our protocol
+(\S\ref{sec:eval}), which is why the full split was infeasible.
+We did not sweep $\lamal$.
+Cosine$(\zlr,\zhr)$ plateaued after epoch~$1$ of the single
+$\lamal{=}10^{-3}$ fine-tune (\S\ref{sec:method-vaesr}); that is a
+training-curve observation, not a hyperparameter study, so we do not
+claim $10^{-3}$ is optimal.
+$\lamg{=}200$ is a compromise on $R(t)$, not a grid search over SR
+PSNR.
+A claimed related paper could not be verified from the citation as
+given and was excluded (\S\ref{sec:setup-hygiene}).
+
+The practical implication is narrow and, we think, useful.
+If a better $\zlr$ does not move the SR table, the next experiment
+is not necessarily a fancier injector.
+Measure the reverse chain; if alignment appears and then fades,
+inference-time decoder-side consistency on that window is a cheap
+test of whether the unused information can still be spent.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+Better LR latents need not yield better latent diffusion SR.
+On a controlled CelebA $4\times$ protocol, an SR-aware VAE improves
+soft-decode by $+2.33$\,dB, yet a matched concat DDPM---and spatial
+FiLM on the same frozen code---consume almost none of that gain.
+The reverse chain becomes strongly aligned with $\zlr$ mid-sampling
+and then loses that alignment before $t{=}0$.
+Decoder-side LR-consistency guidance on the late window, with no
+extra training, recovers $56\%$ of the $2.08$\,dB transfer gap at
+$\lamg{=}200$ ($n{=}256$: $26.33\to 27.50$\,dB) and slightly
+improves LPIPS.
+The contribution is that diagnosis and that inference-time test,
+not a new SR architecture.

@@ -1,0 +1,264 @@
+\section{Method}
+\label{sec:method}
+
+We change one link of \Cref{fig:pipeline} at a time.
+This section specifies the four interventions---representation,
+injection, trajectory measurement, and sampling-time
+guidance---before any SR table.
+Training hyperparameters that never change are in
+\Cref{tab:constants}; checkpoint pairing is in \Cref{tab:ckpts}.
+
+\subsection{Stage A: reconstruction VAE (\vaeone)}
+\label{sec:method-vae1}
+
+\vaeone{} is a convolutional $\beta$-VAE~\citep{kingma2014auto}
+trained only to reconstruct HR CelebA faces.
+It has no SR term.
+The encoder outputs $(\mu,\log\sigma^2)$; training uses
+$z=\mu+\sigma\odot\eps$ with $\eps\sim\Ncal(0,I)$.
+The loss is mean-reduced MSE plus a mean-reduced KL, so the KL
+scale stays stable at latent size $4\times 32\times 32$:
+\begin{equation}
+  \label{eq:vae1}
+  \begin{aligned}
+    \Lcal_{\mathrm{VAE\text{-}1}}
+    \;=\;
+    &\underbrace{\lVert \Dec(z)-\xhr\rVert_2^2}_{\Lcal_{\mathrm{recon}}} \\
+    &+\beta\,
+    \underbrace{\Ebb\bigl[-\tfrac12\bigl(1+\log\sigma^2-\mu^2-\sigma^2\bigr)\bigr]
+    }_{\mathrm{KL}},
+  \end{aligned}
+\end{equation}
+with $\beta=10^{-4}$ and
+$\mathrm{KL}=\mathrm{KL}\bigl(q(z\mid\xhr)\,\Vert\,\Ncal(0,I)\bigr)$.
+We train for $50$ epochs (Adam $10^{-4}$, batch $64$) and freeze
+epoch~$50$ for every later experiment.
+Eval reconstructions use $\mu$, not a posterior sample.
+
+\subsection{Stage B: SR-aware alignment (\vaesr)}
+\label{sec:method-vaesr}
+
+\vaesr{} is \vaeone{} fine-tuned so the LR encoder mean moves toward
+the HR encoder mean without rebuilding the autoencoder
+(\Cref{fig:stage-vae}).
+Initialize from \vaeone{} epoch~$50$.
+On each batch encode HR and the bicubic-upsampled LR with the
+\emph{same} encoder
+\begin{equation}
+  \label{eq:mu-pair}
+  \mu_{\mathrm{hr}},\log\sigma^2_{\mathrm{hr}} \;=\; \Enc(\xhr),\qquad
+  \mu_{\mathrm{lr}} \;=\; \Enc(\xup),
+\end{equation}
+and optimize
+\begin{equation}
+  \label{eq:vaesr}
+  \begin{aligned}
+    \Lcal_{\mathrm{VAE\text{-}SR}}
+    \;=\;
+    &\Lcal_{\mathrm{recon}}(\xhr,\Dec(z_{\mathrm{hr}})) \\
+    &+\beta\,\mathrm{KL}\bigl(q(z\mid\xhr)\,\Vert\,\Ncal(0,I)\bigr) \\
+    &+\lamal \lVert \mu_{\mathrm{lr}} - \sg(\mu_{\mathrm{hr}}) \rVert_2^2.
+  \end{aligned}
+\end{equation}
+Stop-gradient $\sg(\cdot)$ on $\mu_{\mathrm{hr}}$ is required: without
+it the HR code can collapse toward the blurry LR code; with it, only
+the LR mean is pulled.
+$\beta$ is unchanged ($10^{-4}$).
+$\lamal=10^{-3}$ because unweighted align MSE starts near $0.58$;
+$10^{-3}$ keeps the term on the order of recon MSE.
+We fine-tune for $20$ epochs (Adam $10^{-4}$, batch $32$) and freeze
+the result.
+A $\lamal$ sweep is \emph{not} part of the method: cosine$(\zlr,\zhr)$
+plateaus after epoch~$1$, so the next causal question is consumption,
+not more alignment.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+      font=\scriptsize,
+      blk/.style={draw, rounded corners=1.5pt, align=center, inner sep=3pt,
+                  minimum height=8.5mm, anchor=center},
+      arr/.style={-{Latex}, thick, shorten >=1pt, shorten <=1pt}
+    ]
+    \matrix[
+      ampersand replacement=\&,
+      column sep=6.5mm,
+      row sep=1.45cm,
+      cells={anchor=center, inner sep=0pt}
+    ] {
+      \node[blk, fill=gray!12] (hr) {$\xhr$}; \&
+      \node[blk, fill=blue!12] (ehr) {$\Enc$}; \&
+      \node[blk, fill=blue!12] (muh) {$\mu_{\mathrm{hr}}$}; \&
+      \node[blk, fill=orange!15] (dec) {$\Dec(z_{\mathrm{hr}})$}; \\
+      \node[blk, fill=gray!12] (lr) {$\xup$}; \&
+      \node[blk, fill=blue!12] (elr) {$\Enc$}; \&
+      \node[blk, fill=blue!12] (mul) {$\mu_{\mathrm{lr}}$}; \&
+      \node[blk, fill=green!12] (aln) {$\lamal\lVert\mu_{\mathrm{lr}}$\\
+        ${}-\sg(\mu_{\mathrm{hr}})\rVert_2^2$}; \\
+    };
+    \draw[arr] (hr) -- (ehr);
+    \draw[arr] (lr) -- (elr);
+    \draw[arr] (ehr) -- (muh);
+    \draw[arr] (elr) -- (mul);
+    \draw[arr] (muh) -- (dec);
+    \draw[arr] (mul) -- (aln);
+    % Stop-grad: label sits on the arrow, not floating above it.
+    \draw[arr] (muh.south east) to[out=-75, in=90]
+      node[pos=0.5, fill=white, inner sep=1.2pt, font=\tiny] {$\sg$} (aln.north);
+    \node[font=\tiny\itshape, text=black!55, above=0.08cm of hr] {\vaeone{} path (kept)};
+    \node[font=\tiny\itshape, text=black!55, below=0.08cm of lr] {new SR term};
+  \end{tikzpicture}
+  \caption{\vaesr{} fine-tune.
+  HR recon+KL is the \vaeone{} loss~\eqref{eq:vae1}.
+  Alignment pulls $\mu_{\mathrm{lr}}$ toward a stop-grad $\mu_{\mathrm{hr}}$.
+  Soft-decode later scores $\Dec(\mu_{\mathrm{lr}})$, not this training grid.}
+  \label{fig:stage-vae}
+\end{figure}
+
+\subsection{Stage C: concat latent DDPM}
+\label{sec:method-concat}
+
+Given a frozen VAE, we train a noise-prediction UNet on
+$z_{\mathrm{hr}}$ with channel-concat conditioning~\eqref{eq:concat}:
+eight input channels, four output channels, same skeleton and
+$50$-epoch recipe for both VAEs.
+The training loss is standard DDPM noise MSE~\citep{ho2020denoising}.
+Only the frozen VAE changes between the \vaeone{} concat run
+(Phase~8) and the \vaesr{} concat run (Q2).
+We do not resume a concat checkpoint into FiLM (channel layout
+differs).
+
+\subsection{Stage D: spatial FiLM}
+\label{sec:method-film}
+
+To test whether concat is a weak reader of an already-better
+$\zlr$, we replace~\eqref{eq:concat} with spatial FiLM
+\citep{perez2018film} at every UNet scale.
+The noisy latent stays four channels.
+At a feature map $h$ of matching (or bilinearly resized) resolution,
+\begin{equation}
+  \label{eq:film}
+  h' \;=\; \bigl(1+\gamma(\zlr)\bigr)\odot h \;+\; \beta(\zlr),
+\end{equation}
+where $\gamma,\beta$ come from a $1{\times}1$ convolution that is
+\emph{zero-initialized}, so the block is identity at step~$0$.
+Cross-attention is not used (\S\ref{sec:related}).
+
+\paragraph{One-sided $2{\times}2$.}
+A full interaction would train FiLM on both VAEs.
+With one new DDPM, we train FiLM+\vaesr{} and interpret it as a
+one-sided test, written down \emph{before} seeing numbers:
+if SR still matches concat+\vaesr, skip FiLM+\vaeone{} and treat
+concat-as-reader as not the bottleneck;
+if FiLM+\vaesr{} clearly beats concat+\vaesr, then train FiLM+\vaeone{}
+before claiming an interaction.
+Same $50$ epochs, same paired eval as Q2.
+
+\subsection{Stage E: reverse-chain diagnostics}
+\label{sec:method-traj}
+
+To localize where a better $\zlr$ is or is not used, we record, at
+every scheduler index $t$,
+$\cos(\zhat(t),\zlr)$ and $\lVert\zhat(t)-\zlr\rVert$ under both
+frozen VAEs and their matched concat DDPMs, plus the image-space
+scores of $\Dec(\zhat(t))$ versus $\xhr$.
+Soft-decode $\Dec(\zlr)$ is not $\Dec(\zhat(t))$ at a copy peak;
+those are reported separately.
+
+\subsection{Stage F: DPS-style LR-consistency guidance}
+\label{sec:method-guide}
+
+Guidance is inference only: frozen \vaesr{} + Q2 concat, no extra
+training.
+The convention is DPS-like~\citep{chung2023diffusion} and is fixed
+before any guided SR number: gradient with respect to $\zt$,
+correction applied to the already-sampled $z_{t-1}$.
+
+At each reverse index $t$:
+\begin{enumerate}
+  \item $\epshat=\mathrm{UNet}(\zt,\zlr,t)$, \emph{detached}
+        (no UNet backward).
+  \item $\zhat$ as in~\eqref{eq:z0hat}.
+  \item $z_{t-1}\sim p(z_{t-1}\mid \zt,\epshat)$ (unguided DDPM step).
+  \item If $t$ is in the window,
+\end{enumerate}
+\begin{equation}
+  \label{eq:guide}
+  \begin{aligned}
+    \Lcal_g
+    &=
+    \mathrm{mean}_{c,h,w}\bigl\lVert \Dec(\zhat)-\Dec(\zlr)\bigr\rVert_2^2, \\
+    g
+    &=
+    \nabla_{\zt}\Lcal_g, \\
+    z_{t-1}
+    &\leftarrow
+    z_{t-1}-\lamg\, g.
+  \end{aligned}
+\end{equation}
+$\Dec(\zlr)$ is cached once per image.
+Decoder weights stay frozen; the backward runs through the
+$\zhat$ affine and $\Dec$ only.
+Windows (scheduler index; $t{=}0$ is clean):
+baseline $=$ none;
+early $=$ $t\in[0,800]$ every step;
+late $=$ $t\in[0,500]$ every step.
+A budget skip \texttt{guide\_every}$>1$ is implemented but not used
+in the reported runs.
+
+\paragraph{Choosing $\lamg$ from $R(t)$, not from SR PSNR.}
+Define the relative step size
+\begin{equation}
+  \label{eq:Rt}
+  R(t) \;=\; \frac{\lVert g\rVert_2}{\lVert z_{t-1}-z_t\rVert_2}.
+\end{equation}
+A sanity sweep at $\lamg\in\{10^{-3},10^{-2},10^{-1},1\}$ gives
+$R(t)<0.01$ everywhere: $\lamg{=}1$ is a no-op.
+$R$ is linear in $\lamg$.
+\Cref{tab:Rt} scales the $\lamg{=}1$ column.
+$\lVert g\rVert/\lVert\Delta z\rVert$ drops by about $60\times$ from
+$t{=}800$ to $t{=}500$, so \emph{one scalar cannot put every
+checkpoint in a $0.1$--$0.5$ band}.
+We take $\lamg{=}200$ as a compromise: in-band at $t{=}650$
+($R{\approx}0.18$); above $0.5$ but below a $2$--$3$ dominate
+ceiling at $t{=}800$ ($R{\approx}1.16$); small but non-zero in the
+late window ($R(500){\approx}0.04$).
+$\lamg{=}400$ would make the late window fairer but
+$R(800){\approx}2.3$.
+A late PSNR-null is not treated as localization failure unless
+$R(t)$ for $t\le 500$ is clearly $>0$.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Relative guidance size $R(t)$~\eqref{eq:Rt}, scaled from
+  a $\lamg{=}1$ measurement. Bold: operating column.}
+  \label{tab:Rt}
+  \small
+  \begin{tabular}{@{}rcccc@{}}
+    \toprule
+    $t$ & $R(1)$ & $R(100)$ & $\mathbf{R(200)}$ & $R(400)$ \\
+    \midrule
+    $800$ & $0.0058$ & $0.58$ & $\mathbf{1.16}$ & $2.32$ \\
+    $650$ & $0.0009$ & $0.09$ & $\mathbf{0.18}$ & $0.36$ \\
+    $500$ & $0.0002$ & $0.02$ & $\mathbf{0.04}$ & $0.08$ \\
+    $300$ & $0.0001$ & $0.01$ & $\mathbf{0.02}$ & $0.04$ \\
+    $100$ & $0.0001$ & $0.01$ & $\mathbf{0.02}$ & $0.04$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Pre-registered calls (before guided PSNR).}
+PSNR$\uparrow$ with LPIPS $\approx 0.068$ is a strong positive;
+PSNR$\uparrow$ with LPIPS toward $0.119$ is over-guidance.
+If both windows work, Stage~2 is a late-window dose
+$\lamg\in\{50,200,800\}$ only---no combined schedule.
+The $n{=}256$ confirmation (val\_index $0..255$, same checkpoints,
+late window) is declared before looking at those numbers, and
+survives iff (a)~$\ge 90\%$ of images have $\Delta\mathrm{PSNR}>0$ at
+each $\lamg$, (b)~mean $\Delta$LPIPS is monotone
+$50<200<800$ with $\lamg{=}800$ worse than unguided and
+$\lamg{=}50$ not worse, (c)~PSNR CIs exclude $0$ at all three
+$\lamg$.
+The first line of each job must reprint
+$\mathrm{PSNR}(\Dec(\zlr),\xhr)\approx 28.48$ on indices $0..63$;
+otherwise the wrong VAE is loaded and the run is discarded.

@@ -1,0 +1,81 @@
+\section{Introduction}
+\label{sec:intro}
+
+Generative super-resolution (SR) increasingly runs in a
+\emph{latent} space: an autoencoder compresses images, a diffusion
+model denoises the high-resolution (HR) latent, and a decoder returns
+pixels~\citep{rombach2022high,saharia2023image,wang2024exploiting}.
+The low-resolution (LR) observation enters as a condition, typically
+the encoded upsampled LR image $\zlr=\Enc(\xup)$.
+This design assumes a convenient causal story:
+if $\zlr$ is a better representation of the HR target, the reverse
+process should emit a better $\zsr$, and SR metrics should follow.
+
+That story is not a theorem.
+It confuses two jobs that share a decoder but not an objective
+(\Cref{tab:two-jobs}):
+soft-decode $\Dec(\zlr)$ scores what is already in the LR code;
+\lsrmethod{} $\Dec(\zsr)$ scores what a conditional DDPM uses while
+sampling $p(\zhr\mid\zlr)$.
+
+This paper is a controlled diagnosis of that transfer, not a new
+SOTA SR method.
+We freeze the data, the UNet skeleton, the noise schedule, and the
+evaluation noise, and change one link at a time
+(\Cref{fig:causal-chain}): representation (\vaesr), injection
+(concat vs.\ spatial FiLM), reverse-chain measurement, then
+inference-time LR-consistency guidance.
+Headline outcomes---a large soft-decode gain that concat and FiLM
+do not consume, a mid-reverse copy that later collapses, and late
+guidance that recovers about half the gap---are in~\S\ref{sec:experiments}.
+The intervention that works is not the one the representation
+hypothesis suggested.
+
+\paragraph{Scope.}
+No new backbone, tokenizer, or trained guidance network.
+The FiLM null is for this conditioner on this frozen \vaesr{} code.
+$\Dec(\zlr)$ is not an SR method.
+Citation hygiene:~\S\ref{sec:setup-hygiene}.
+
+\begin{figure*}[t]
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tikzpicture}[
+      font=\small,
+      box/.style={draw, rounded corners=2pt, align=center, inner sep=6pt, minimum height=1.35cm},
+      arr/.style={-{Latex}, thick}
+    ]
+    \node[box, fill=blue!8] (rep) {%
+      \textbf{1. Representation}\\[2pt]
+      \vaeone{} $\to$ \vaesr\\
+      $\Dec(\zlr)$: $26.15\to 28.48$\,dB\\
+      \textit{code gets better}};
+    \node[box, fill=orange!12, right=0.55cm of rep] (inj) {%
+      \textbf{2. Injection}\\[2pt]
+      concat or spatial FiLM\\
+      SR: $26.26\to 26.48$\,dB\\
+      FiLM $\Delta{=}-0.03$ (null)\\
+      \textit{reader is not the hole}};
+    \node[box, fill=yellow!20, right=0.55cm of inj] (traj) {%
+      \textbf{3. Reverse chain}\\[2pt]
+      $\cos(\zhat,\zlr)$\\
+      copy $0.985$ at $t{=}656$\\
+      $t{=}0$: $0.786$\\
+      \textit{late HR prior}};
+    \node[box, fill=green!12, right=0.55cm of traj] (guid) {%
+      \textbf{4. Guidance}\\[2pt]
+      DPS on $t\le 500$\\
+      $\lamg{=}200$: $26.33\to 27.50$\\
+      $56\%$ of $\approx 2$\,dB gap\\
+      \textit{no new training}};
+    \draw[arr] (rep) -- (inj);
+    \draw[arr] (inj) -- (traj);
+    \draw[arr] (traj) -- (guid);
+  \end{tikzpicture}%
+  }
+  \caption{Causal chain.
+  Each box changes one link and holds the others fixed.
+  Numbers are the locked outcomes of~\S\ref{sec:experiments}
+  ($n{=}64$ except the last box, which is the $n{=}256$ dose).}
+  \label{fig:causal-chain}
+\end{figure*}

@@ -1,57 +1,38 @@
 # LatentSR
 
-PyTorch **Latent Diffusion** for **Image Super-Resolution** on CelebA faces.
+Code and technical report for **When Does Better Conditioning Help?**
+Representation, injection, and sampling-time guidance in latent diffusion
+super-resolution (CelebA faces, 32→128).
 
-```
-latentsr  →  imports  →  generative_models.ddpm
-```
+A convolutional VAE compresses images; a DDPM denoises the HR latent,
+conditioned on the encoded upsampled LR image `z_lr`. This repo is a
+controlled diagnosis of that pipeline, not a new SOTA SR architecture.
 
-| Setting | Value |
-|---------|--------|
-| Dataset | CelebA (center-crop 178 → resize) |
-| HR / LR | **128×128** / **32×32** (4×) |
-| Latents | Conv VAE → `(4, 32, 32)`, on-the-fly encode + `latent_scale` |
-| Diffusion | Reuses `generative_models.ddpm` (UNet, schedule, loss) |
+| | |
+|---|---|
+| Report | [Technical_report.pdf](Technical_report.pdf) · [LaTeX](paper/) |
+| Checkpoints | [HusseinHamouda/LatentSR-checkpoints](https://huggingface.co/HusseinHamouda/LatentSR-checkpoints) |
+| DDPM dependency | [`generative-models`](https://github.com/HusseinHanafy207/generative-models) (`generative_models.ddpm`) |
 
----
+## Findings
 
-## Phases
+Matched CelebA 4× protocol (frozen autoencoders, same UNet skeleton and noise schedule):
 
-| Phase | Goal |
-|-------|------|
-| 0 | Package scaffold + `generative-models` dependency |
-| 1 | Train convolutional VAE on CelebA 128 |
-| 2 | Freeze VAE; `encode_scaled` / `decode_scaled` |
-| 3 | On-the-fly image → scaled latent (no disk cache yet) |
-| 4 | Unconditional latent DDPM |
-| 5 | Verify LDM: noise → latent → decode → image |
-| 6 | LR/HR pixel pairs |
-| 7 | On-the-fly `(z_lr, z_hr)` pairs |
-| 8 | Concat-conditioned latent SR diffusion |
-| 9 | LR → HR inference CLI |
-| 10 | PSNR / SSIM / LPIPS vs bicubic |
-| 11 | Deferred (cache, DDIM, better conditioning, …) |
+- An SR-aware VAE (**VAE-SR**) lifts soft-decode `Dec(z_lr)` by **+2.33 dB** (PSNR 26.15→28.48, LPIPS 0.273→0.119, n=64). Concat LatentSR on the same code gains only **+0.22 dB**. Spatial FiLM vs concat is a null.
+- Mid-reverse, `ẑ₀` aligns with `z_lr` (cosine **0.985** at t=656 under VAE-SR); that alignment drops before t=0.
+- Decoder-side LR-consistency guidance on the late window, with no extra training, recovers **56%** of the 2.08 dB transfer gap at λ_g=200 (n=256: 26.33→27.50 dB) and slightly improves LPIPS.
 
----
+Soft-decode scores the *condition*. LatentSR scores the *sampler*. They are different jobs.
 
 ## Setup
 
-This project depends on [`generative-models`](https://github.com/HusseinHanafy207/generative-models) (specifically `generative_models.ddpm`). Clone it and install in editable mode, then LatentSR:
+Python ≥ 3.10.
 
 ```bash
 git clone https://github.com/HusseinHanafy207/generative-models.git
 pip install -e ./generative-models
-pip install -e ".[dev]"
+pip install -e ".[dev,eval]"
 ```
-
-If `generative-models` already lives next to this repo, point `pip` at that checkout instead:
-
-```bash
-pip install -e /path/to/generative-models
-pip install -e ".[dev]"
-```
-
-Smoke check:
 
 ```bash
 python -c "from generative_models.ddpm import UNet, NoiseScheduler; print('DDPM OK')"
@@ -59,145 +40,41 @@ python -c "import latentsr; print(latentsr.__version__)"
 pytest tests/ -q
 ```
 
-### Train the VAE (Phase 1)
+YAML configs default to Kaggle or Colab paths. For a local machine, set `data_dir` and the output directories in the YAML, or pass `--data-dir` / `--output-dir` on eval scripts. CelebA downloads on first train unless you pass `--no-download`.
 
-```bash
-# Sanity epoch (downloads CelebA on first run ~1.4GB)
-python scripts/train_vae.py --epochs 1
+## Checkpoints
 
-# Full run
-python scripts/train_vae.py --config configs/vae_celeba.yaml
+From [HusseinHamouda/LatentSR-checkpoints](https://huggingface.co/HusseinHamouda/LatentSR-checkpoints):
 
-# Reconstructions / latent interpolations
-python scripts/recon_vae.py --checkpoint outputs/vae/checkpoints/latest.pt --interpolate
-```
+| Path | What |
+|---|---|
+| `vae/checkpoint_epoch_050.pt` | Reconstruction VAE (**VAE-1**) |
+| `vae_sr/latest.pt` | SR-aware fine-tune (**VAE-SR**) |
+| `latest.pt` (repo root) | Concat LatentSR trained on VAE-1 |
+| `latent_sr_q2/latest.pt` | Concat LatentSR trained on VAE-SR |
+| `latent_sr_adagn_q2/latest.pt` | Spatial FiLM on frozen VAE-SR (`condition_type: adagn`) |
 
-### Frozen VAE (Phase 2)
+Guidance in the report always pairs Q2 concat epoch-50 with VAE-SR epoch-20. Do not mix the VAE-1 concat checkpoint or the FiLM checkpoint into those runs.
 
-```bash
-python scripts/verify_frozen_vae.py \
-  --checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt
-```
+## Reproduce the report tables
 
-Later phases must load with ``load_frozen_vae`` and use ``encode_scaled`` /
-``decode_scaled`` (default ``latent_scale=1.0``).
+Eval reverse-diffusion noise (`x_T` and every reverse step) is seeded **per val index** from `--seed` (default 42), so two checkpoints see the same images and the same noise. Never pool n=64 and n=256.
 
-### On-the-fly latents (Phase 3)
-
-No disk cache — encode each batch live:
-
-```bash
-python scripts/verify_onthefly_latents.py \
-  --checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt
-```
-
-### Latent DDPM (Phase 4)
-
-```bash
-# Sanity epoch
-python scripts/train_latent_ddpm.py --config configs/latent_ddpm.yaml --epochs 1 --no-download
-
-# Full run / resume
-python scripts/train_latent_ddpm.py --config configs/latent_ddpm.yaml --no-download
-python scripts/train_latent_ddpm.py --resume outputs/latent_ddpm/checkpoints/latest.pt --epochs 50 --no-download
-```
-
-### Sample LDM (Phase 5)
-
-```bash
-python scripts/sample_ldm.py \
-  --checkpoint /content/drive/MyDrive/LatentSR/outputs/latent_ddpm/checkpoints/latest.pt \
-  --num-samples 16 \
-  --device cuda
-```
-
-Inspect `…/outputs/latent_ddpm/samples/ldm_samples.png` — faces should be recognizable.
-
-### SR pixel pairs (Phase 6)
-
-```bash
-python scripts/visualize_sr_pairs.py --config configs/sr_pairs.yaml --no-download
-```
-
-Grid rows: nearest(LR) | bicubic(LR→HR) | HR.
-
-### SR latent pairs (Phase 7)
-
-```bash
-python scripts/verify_sr_latents.py --config configs/onthefly_sr_latent.yaml --no-download
-```
-
-Rows: HR | decode(z_hr) | decode(z_lr) | bicubic(LR→HR).
-
-### Conditional Latent SR (Phase 8)
-
-```bash
-!mkdir -p /content/drive/MyDrive/LatentSR/outputs/latent_sr/{checkpoints,samples,logs}
-!python scripts/train_sr.py --config configs/latent_sr.yaml --epochs 1 --device cuda --no-download
-!python scripts/train_sr.py --config configs/latent_sr.yaml --device cuda --no-download
-# Resume:
-!python scripts/train_sr.py --config configs/latent_sr.yaml \
-  --resume /content/drive/MyDrive/LatentSR/outputs/latent_sr/checkpoints/latest.pt \
-  --epochs 50 --device cuda --no-download
-```
-
-### SR inference (Phase 9)
-
-```bash
-# CelebA val grid: nearest(LR) | bicubic | LatentSR | HR
-python scripts/super_resolve.py \
-  --checkpoint outputs/latent_sr/checkpoints/latest.pt \
-  --vae-checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt \
-  --config configs/latent_sr.yaml \
-  --from-celeba --num-images 8 --no-download
-
-# Single image / folder (32×32 LR or 128×128 will be downsampled)
-python scripts/super_resolve.py \
-  --checkpoint outputs/latent_sr/checkpoints/latest.pt \
-  --input path/to/face.png \
-  --output outputs/latent_sr/samples/sr_out.png
-```
-
-Add `--from-celeba` to sample a val comparison grid. `decode(z_lr)` is included by default; pass `--no-include-soft-decode` to hide that row.
-
-### Evaluate vs bicubic (Phase 10)
-
-```bash
-pip install lpips   # once, for LPIPS
-
-python scripts/evaluate.py \
-  --checkpoint outputs/latent_sr/checkpoints/latest.pt \
-  --vae-checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt \
-  --config configs/eval_sr.yaml \
-  --num-images 64 --no-download
-```
-
-Writes under `output_dir` (default `outputs/eval/`):
-- `metrics.csv` / `metrics.json` — mean±std for **bicubic**, **soft_decode**, **LatentSR**
-- `per_image.csv` — one row per val image (needed for paired tests)
-- `eval_compare.png` — nearest(LR) | bicubic | LatentSR | decode(z_lr) | HR
-
-Reverse-diffusion noise (``x_T`` **and** every reverse step) is seeded **per val index** from `--seed` (default 42), so two checkpoints can be compared on the same images and the same noise regardless of batch size. Use `--no-include-soft-decode` to drop `decode(z_lr)` from the grid only; it is still scored in `per_image.csv`.
-
-Use `--no-lpips` if you skip the `lpips` install. Full reverse diffusion per image is slow; start with `--num-images 16`.
-
-### Paired Q2 comparison (VAE-1 vs VAE-SR)
-
-Do this before any λ sweep. Re-run **both** existing DDPMs with identical settings, then stats:
+**VAE / concat / FiLM / timestep / ẑ₀** use n=64. **Guidance confirmation** uses n=256 (`val_index` 0..255).
 
 ```bash
 python scripts/evaluate.py \
-  --checkpoint outputs/latent_sr/checkpoints/latest.pt \
-  --vae-checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt \
+  --checkpoint path/to/vae1_concat.pt \
+  --vae-checkpoint path/to/vae/checkpoint_epoch_050.pt \
   --config configs/eval_sr.yaml \
-  --output-dir outputs/eval_sr_vae1_paired \
+  --data-dir data/raw --output-dir outputs/eval_sr_vae1_paired \
   --num-images 64 --batch-size 4 --seed 42 --no-download
 
 python scripts/evaluate.py \
-  --checkpoint outputs/latent_sr_q2/checkpoints/latest.pt \
-  --vae-checkpoint outputs/vae_sr/checkpoints/latest.pt \
+  --checkpoint path/to/latent_sr_q2/latest.pt \
+  --vae-checkpoint path/to/vae_sr/latest.pt \
   --config configs/eval_sr.yaml \
-  --output-dir outputs/eval_sr_q2_paired \
+  --data-dir data/raw --output-dir outputs/eval_sr_q2_paired \
   --num-images 64 --batch-size 4 --seed 42 --no-download
 
 python scripts/compare_sr_evals.py \
@@ -207,128 +84,89 @@ python scripts/compare_sr_evals.py \
   --output-dir outputs/eval_sr_compare
 ```
 
-`compare_sr_evals.py` writes permutation p-values and bootstrap 95% CIs (Δ = VAE-SR − VAE-1) for PSNR/LPIPS (primary) and SSIM/edge MAE (secondary), plus `delta_psnr_soft_vs_sr.png` and `z_lr_rmse_vs_z_sr_rmse.png`. Decide whether a λ sweep is justified from those, not from a dB cutoff.
-
-**Colab:** `configs/eval_sr.yaml` is Kaggle (`/kaggle/working/...`). Use `configs/eval_sr_colab.yaml`, and always pass `--vae-checkpoint` because a Kaggle-trained DDPM stores a Kaggle VAE path in its metadata.
+Repeat the Q2 `evaluate.py` call with the FiLM checkpoint for the injection table.
 
 ```bash
-python scripts/evaluate.py \
-  --checkpoint /content/drive/MyDrive/LatentSR/outputs/latent_sr/checkpoints/latest.pt \
-  --vae-checkpoint /content/drive/MyDrive/LatentSR/outputs/vae/checkpoints/checkpoint_epoch_050.pt \
-  --config configs/eval_sr_colab.yaml \
-  --output-dir /content/drive/MyDrive/LatentSR/outputs/eval_sr_vae1_paired \
+python scripts/diagnose_timesteps.py \
+  --config configs/eval_sr.yaml \
+  --baseline-sr path/to/vae1_concat.pt \
+  --baseline-vae path/to/vae/checkpoint_epoch_050.pt \
+  --candidate-sr path/to/latent_sr_q2/latest.pt \
+  --candidate-vae path/to/vae_sr/latest.pt \
+  --output-dir outputs/eval_timestep_diagnostic \
   --num-images 64 --batch-size 4 --seed 42 --no-download
 
-python scripts/evaluate.py \
-  --checkpoint /content/drive/MyDrive/LatentSR/outputs/latent_sr_q2/checkpoints/latest.pt \
-  --vae-checkpoint /content/drive/MyDrive/LatentSR/outputs/vae_sr/checkpoints/latest.pt \
-  --config configs/eval_sr_colab.yaml \
-  --output-dir /content/drive/MyDrive/LatentSR/outputs/eval_sr_q2_paired \
-  --num-images 64 --batch-size 4 --seed 42 --no-download
-
-python scripts/compare_sr_evals.py \
-  --baseline /content/drive/MyDrive/LatentSR/outputs/eval_sr_vae1_paired/per_image.csv \
-  --candidate /content/drive/MyDrive/LatentSR/outputs/eval_sr_q2_paired/per_image.csv \
-  --baseline-name vae1 --candidate-name vae_sr \
-  --output-dir /content/drive/MyDrive/LatentSR/outputs/eval_sr_compare
+python scripts/diagnose_z0_recon.py \
+  --config configs/eval_sr.yaml \
+  --baseline-sr path/to/vae1_concat.pt \
+  --baseline-vae path/to/vae/checkpoint_epoch_050.pt \
+  --candidate-sr path/to/latent_sr_q2/latest.pt \
+  --candidate-vae path/to/vae_sr/latest.pt \
+  --output-dir outputs/eval_z0_recon \
+  --num-images 64 --seed 42 --no-download
 ```
 
-### VAE bottleneck (research Phase A)
-
-No diffusion — measures what the frozen VAE already loses:
+**Guidance** (frozen VAE-SR + Q2 concat, late window). Confirmatory dose is four jobs, n=256, about 21 s/image with a decoder backward:
 
 ```bash
-python scripts/evaluate_vae.py \
-  --vae-checkpoint outputs/vae/checkpoints/checkpoint_epoch_050.pt \
-  --config configs/eval_vae.yaml \
-  --num-images 64 --no-download
+python scripts/run_guidance_n256.py --job baseline \
+  --sr-checkpoint path/to/latent_sr_q2/latest.pt \
+  --vae-checkpoint path/to/vae_sr/latest.pt \
+  --config configs/eval_sr.yaml --data-dir data/raw --output-root outputs
+
+python scripts/run_guidance_n256.py --job late50  --sr-checkpoint ... --vae-checkpoint ...
+python scripts/run_guidance_n256.py --job late200 --sr-checkpoint ... --vae-checkpoint ...
+python scripts/run_guidance_n256.py --job late800 --sr-checkpoint ... --vae-checkpoint ...
+python scripts/run_guidance_n256.py --job compare --output-root outputs
 ```
 
-Writes under `output_dir` (default `outputs/eval_vae/`):
-- `metrics.csv` / `metrics.json` — PSNR, SSIM, LPIPS, Sobel edge MAE, radial FFT-band error for **bicubic**, **decode(z_lr)**, **decode(z_hr)**
-- `per_image.csv` — one row per val image, including cosine / latent MSE
-- `std(μ)` and suggested `latent_scale = 1 / std(μ_HR)`
-- `eval_vae_compare.png` — nearest(LR) | bicubic | decode(z_lr) | decode(z_hr) | HR
+Re-run the same command after a disconnect; already-finished `val_index` rows are skipped.
 
-Use `--no-lpips` if you skip the `lpips` install. Compare `decode(z_hr)` to the Phase 10 LatentSR PSNR (~26.25) to decide whether the VAE is the bottleneck.
-
-### SR-aware VAE (research Q2)
-
-Phase A showed `decode(z_hr)` PSNR ~37.3 while LatentSR is ~26.3 and `decode(z_lr)` ≈ bicubic. Fine-tune VAE-1 so `μ_lr` moves toward `sg(μ_hr)` without retraining a new autoencoder from scratch:
+Paper figures (from cached CSVs, no resampling):
 
 ```bash
-python scripts/train_vae_sr.py \
-  --config configs/vae_sr_align.yaml \
-  --init-from outputs/vae/checkpoints/checkpoint_epoch_050.pt \
-  --no-download
+python scripts/plot_centerpiece.py
 ```
 
-Then re-run `scripts/evaluate_vae.py` on the new checkpoint. Watch **cosine(z_lr, z_hr)** (baseline ~0.63) and **soft_decode PSNR**; `vae_hr` PSNR should stay high. Hugging Face uploads go under `vae_sr/` so they do not overwrite the LatentSR DDPM `latest.pt`.
+## Train from scratch
 
-### Matched LatentSR on VAE-SR (Q2)
-
-Same UNet, schedule, and 50 epochs as Phase 8; only the frozen VAE changes. HF uploads go under `latent_sr_q2/`.
+Point `data_dir` and output dirs in each YAML at local paths first. Configs ship with Kaggle/Colab paths.
 
 ```bash
-python scripts/train_sr.py \
-  --config configs/latent_sr_q2.yaml \
-  --vae-checkpoint outputs/vae_sr/checkpoints/latest.pt \
-  --epochs 1 --device cuda --no-download
-```
-
-Full run / resume:
-
-```bash
-python scripts/train_sr.py --config configs/latent_sr_q2.yaml --device cuda --no-download
+python scripts/train_vae.py --config configs/vae_celeba.yaml
+python scripts/train_vae_sr.py --config configs/vae_sr_align.yaml \
+  --init-from outputs/vae/checkpoints/checkpoint_epoch_050.pt --no-download
+python scripts/train_sr.py --config configs/latent_sr.yaml --no-download
 python scripts/train_sr.py --config configs/latent_sr_q2.yaml \
-  --resume path/to/latent_sr_q2/latest.pt --epochs 50 --device cuda --no-download
+  --vae-checkpoint outputs/vae_sr/checkpoints/latest.pt --no-download
+python scripts/train_sr.py --config configs/latent_sr_adagn_q2.yaml \
+  --vae-checkpoint outputs/vae_sr/checkpoints/latest.pt --no-download
 ```
 
-Then evaluate with `scripts/evaluate.py` pointing at the Q2 DDPM and VAE-SR checkpoints.
-
-### AdaGN conditioner (concat follow-up)
-
-Q2 showed VAE-SR improves `decode(z_lr)` a lot but concat LatentSR barely moves. Train the **same** frozen VAE-SR with FiLM/AdaGN instead of channel concat (`x_t` stays 4 channels; `z_lr` modulates every UNet scale). Do **not** resume a concat checkpoint.
-
-Kaggle:
+Do not resume a concat checkpoint into FiLM (channel layout differs).
+`Kaggle_Notebook.ipynb` is the FiLM (AdaGN) training notebook.
 
 ```bash
-python scripts/train_sr.py \
-  --config configs/latent_sr_adagn_q2.yaml \
-  --vae-checkpoint /kaggle/working/outputs/vae_sr/checkpoints/latest.pt \
-  --epochs 1 --device cuda --no-download
+python scripts/super_resolve.py \
+  --checkpoint outputs/latent_sr_q2/checkpoints/latest.pt \
+  --vae-checkpoint outputs/vae_sr/checkpoints/latest.pt \
+  --config configs/latent_sr_q2.yaml \
+  --from-celeba --num-images 8 --no-download
 ```
-
-Colab (Drive):
-
-```bash
-python scripts/train_sr.py \
-  --config configs/latent_sr_adagn_q2_colab.yaml \
-  --epochs 50 --device cuda --no-download
-```
-
-HF uploads go under `latent_sr_adagn_q2/` (Kaggle config only). After 50 epochs, evaluate with the same paired protocol as Q2 (`--seed 42`, `--include-soft-decode`, `per_image.csv`) and compare to `outputs/eval_sr_q2_paired/`. The VAE-1 AdaGN control is the same config with `--vae-checkpoint` pointing at VAE-1 and a new `checkpoint_dir`.
-
----
 
 ## Layout
 
 ```
 LatentSR/
+├── paper/                 # technical report (LaTeX)
+├── Technical_report.pdf
 ├── configs/
 ├── scripts/
 ├── src/latentsr/
-│   ├── datasets/
-│   ├── vae/
-│   ├── diffusion/
-│   ├── super_resolution/
-│   ├── metrics/
-│   └── utils/
 ├── tests/
-└── outputs/
+├── Kaggle_Notebook.ipynb  # FiLM training on Kaggle
+└── outputs/               # local runs (gitignored)
 ```
-
----
 
 ## License
 

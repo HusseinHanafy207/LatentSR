@@ -1,0 +1,125 @@
+% neurips_2024.sty
+% Compatible with the official NeurIPS 2024 author kit (preprint / final / anonymous).
+% If Overleaf already provides neurips_2024.sty, prefer that official file.
+%
+% Options: preprint | final | nonatbib
+%   preprint  --- named authors (arXiv / technical report)
+%   final     --- camera-ready notice
+%   default   --- anonymous + line numbers
+
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{neurips_2024}[2024/05/09 NeurIPS 2024 style (local copy)]
+
+\newif\if@neuripsfinal \@neuripsfinalfalse
+\newif\if@preprint \@preprintfalse
+\newif\if@anonymous \@anonymoustrue
+\newif\if@natbib \@natbibtrue
+
+\DeclareOption{final}{\@neuripsfinaltrue\@anonymousfalse}
+\DeclareOption{preprint}{\@preprinttrue\@anonymousfalse}
+\DeclareOption{nonatbib}{\@natbibfalse}
+\ProcessOptions\relax
+
+\RequirePackage[T1]{fontenc}
+\RequirePackage{times}
+\RequirePackage{latexsym}
+\RequirePackage{microtype}
+\RequirePackage[dvipsnames]{xcolor}
+\RequirePackage{lineno}
+
+\if@natbib
+  \RequirePackage{natbib}
+  \bibliographystyle{plainnat}
+\fi
+
+\setlength{\paperheight}{11in}
+\setlength{\paperwidth}{8.5in}
+\setlength{\oddsidemargin}{-0.22in}
+\setlength{\evensidemargin}{-0.22in}
+\setlength{\topmargin}{-0.5in}
+\setlength{\headheight}{0in}
+\setlength{\headsep}{0.5in}
+\setlength{\textheight}{9.0in}
+\setlength{\textwidth}{6.75in}
+\setlength{\columnsep}{0.25in}
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0ex}
+\setlength{\floatsep}{12pt plus 2pt minus 2pt}
+\setlength{\textfloatsep}{18pt plus 2pt minus 4pt}
+\setlength{\intextsep}{12pt plus 2pt minus 2pt}
+
+\twocolumn
+\flushbottom
+\sloppy
+\pagestyle{plain}
+
+\if@anonymous
+  \if@preprint\else
+    \if@neuripsfinal\else
+      \linenumbers
+    \fi
+  \fi
+\fi
+
+\newcommand{\@noticestring}{NeurIPS 2024.}
+\if@preprint
+  \renewcommand{\@noticestring}{Technical report. NeurIPS 2024 style. Not a conference submission.}
+\fi
+\if@neuripsfinal
+  \renewcommand{\@noticestring}{38th Conference on Neural Information Processing Systems (NeurIPS 2024).}
+\fi
+
+\def\and{\if@anonymous\unskip\else\unskip, \ignorespaces\fi}
+
+\def\maketitle{\par
+  \begingroup
+    \def\thefootnote{\fnsymbol{footnote}}%
+    \def\@makefnmark{\hbox to 0pt{$\m@th^{\@thefnmark}$\hss}}%
+    \long\def\@makefntext##1{\parindent 1em\noindent
+            \hbox to 1.8em{\hss$\m@th^{\@thefnmark}$}##1}%
+    \twocolumn[\@maketitle]%
+    \@thanks
+  \endgroup
+  \setcounter{footnote}{0}%
+  \let\maketitle\relax
+  \let\@maketitle\relax
+  \gdef\@thanks{}%
+  \gdef\@author{}%
+  \gdef\@title{}%
+  \let\thanks\relax
+}
+
+\def\@maketitle{%
+  \newpage
+  \null
+  \vskip 0.3in
+  \begin{center}
+    {\LARGE \bfseries \@title \par}%
+    \vskip 0.25in
+    \if@anonymous
+  {\large Anonymous Author(s) \par}%
+\else
+  {\large \@author \par}%
+\fi
+  \end{center}
+  \vskip 0.2in
+}
+
+\renewenvironment{abstract}{%
+  \centerline{\large\bfseries Abstract}%
+  \vspace{0.5em}%
+  \begin{quote}\small
+}{%
+  \end{quote}
+  \vspace{0.6em}%
+}
+
+\renewcommand{\section}{\@startsection{section}{1}{\z@}%
+  {-2.0ex plus -0.5ex minus -.2ex}{1.5ex plus 0.3ex}{\large\bfseries}}
+\renewcommand{\subsection}{\@startsection{subsection}{2}{\z@}%
+  {-1.8ex plus -0.5ex minus -.2ex}{0.8ex plus .2ex}{\normalsize\bfseries}}
+\renewcommand{\subsubsection}{\@startsection{subsubsection}{3}{\z@}%
+  {-1.5ex plus -0.5ex minus -.2ex}{0.5ex plus .2ex}{\normalsize\bfseries}}
+\renewcommand{\paragraph}[1]{\par\vspace{0.4em}\noindent\textbf{#1}\enspace}
+
+\endinput
