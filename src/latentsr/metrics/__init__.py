@@ -26,6 +26,10 @@ from latentsr.metrics.paired_stats import (
     sign_flip_permutation_pvalue,
     spearman_rho,
 )
+from latentsr.metrics.representation_geometry import (
+    format_geometry_table,
+    run_representation_geometry,
+)
 from latentsr.metrics.timestep_diagnostic import run_timestep_diagnostic
 from latentsr.metrics.z0_recon_diagnostic import run_z0_recon_diagnostic
 
@@ -39,12 +43,14 @@ __all__ = [
     "evaluate_sr",
     "evaluate_vae",
     "format_bottleneck_note",
+    "format_geometry_table",
     "format_metric_table",
     "frequency_band_error",
     "PRE_REGISTERED",
     "REFERENCE_BANNER",
     "psnr",
     "run_guidance_condition",
+    "run_representation_geometry",
     "run_timestep_diagnostic",
     "run_z0_recon_diagnostic",
     "sign_flip_permutation_pvalue",
