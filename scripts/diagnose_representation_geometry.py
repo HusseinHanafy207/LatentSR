@@ -1,4 +1,4 @@
-"""RiT-style geometry: VAE-1 vs VAE-SR latents (no diffusion).
+"""RiT-style geometry: VAE-1 vs VAE-SR latents.
 
 Computes on matched CelebA val images:
 
@@ -10,13 +10,14 @@ Computes on matched CelebA val images:
 
 For both ``z_hr = encode(HR)`` and ``z_lr = encode(bicubic↑ LR)``.
 
-Example:
+Full-val / trustworthy κ (need N > ambient D=4096) + TwoNN uncertainty:
 
   python scripts/diagnose_representation_geometry.py \\
     --baseline-vae outputs/vae/checkpoints/checkpoint_epoch_050.pt \\
     --candidate-vae outputs/vae_sr/checkpoints/latest.pt \\
     --config configs/eval_vae.yaml \\
-    --num-images 2048 --batch-size 32 --seed 42 --no-download
+    --num-images 0 --batch-size 32 --seed 42 --no-download \\
+    --twonn-bootstraps 10 --twonn-subsample 5000
 """
 
 from __future__ import annotations
@@ -47,8 +48,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-images",
         type=int,
-        default=2048,
-        help="Val images (TwoNN/κ need ample N; 2048+ recommended for D=4096).",
+        default=0,
+        help=(
+            "Val images to encode. Use 0 for the full val split "
+            "(needed for full-rank κ at D=4096; CelebA val ≈ 19867)."
+        ),
     )
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument(
@@ -66,12 +70,20 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("outputs/eval_representation_geometry"),
     )
-    parser.add_argument("--twonn-bootstraps", type=int, default=10)
+    parser.add_argument(
+        "--twonn-bootstraps",
+        type=int,
+        default=10,
+        help="Independent TwoNN subsample draws (need >1 and subsample < N for ±std).",
+    )
     parser.add_argument(
         "--twonn-subsample",
         type=int,
-        default=None,
-        help="Subsample size per TwoNN bootstrap (default: min(5000, N)).",
+        default=5000,
+        help=(
+            "Points per TwoNN bootstrap. Keep strictly < N for nonzero uncertainty "
+            "(default 5000). If >= N, only one full-sample estimate is returned."
+        ),
     )
     parser.add_argument(
         "--download",
@@ -113,7 +125,6 @@ def main() -> None:
         if args.latent_scale is not None
         else config.get("latent_scale", 1.0)
     )
-    num_images = int(args.num_images)
     batch_size = int(
         args.batch_size if args.batch_size is not None else config.get("batch_size", 32)
     )
@@ -128,10 +139,6 @@ def main() -> None:
             "Pass --data-dir or set data_dir in the config."
         )
 
-    twonn_subsample = args.twonn_subsample
-    if twonn_subsample is None:
-        twonn_subsample = min(5000, num_images)
-
     print(
         f"baseline ({args.baseline_name}): {args.baseline_vae}  "
         f"epoch={ckpt_a.get('epoch')}",
@@ -142,16 +149,6 @@ def main() -> None:
         f"epoch={ckpt_b.get('epoch')}",
         flush=True,
     )
-    print(
-        f"num_images={num_images}  batch_size={batch_size}  "
-        f"latent_scale={latent_scale}  num_workers={args.num_workers}",
-        flush=True,
-    )
-    print(
-        f"TwoNN bootstraps={args.twonn_bootstraps}  subsample={twonn_subsample}",
-        flush=True,
-    )
-    print(f"output_dir={args.output_dir}", flush=True)
     print("Building val-only CelebA loader (no train split)…", flush=True)
 
     val_loader = get_sr_pair_val_dataloader(
@@ -163,7 +160,55 @@ def main() -> None:
         pin_memory=bool(config.get("pin_memory", True)) and device.type == "cuda",
         download=bool(args.download),
     )
-    print(f"val size ≈ {len(val_loader.dataset)}  batches/epoch ≈ {len(val_loader)}", flush=True)
+    val_n = len(val_loader.dataset)
+    if int(args.num_images) <= 0:
+        num_images = int(val_n)
+        print(f"--num-images 0 → using full val set ({num_images})", flush=True)
+    else:
+        num_images = int(args.num_images)
+        if num_images > val_n:
+            print(
+                f"WARNING: requested {num_images} images but val has {val_n}; "
+                f"using {val_n}.",
+                flush=True,
+            )
+            num_images = val_n
+
+    # Ambient latent dim for this VAE (C·H·W); used only for warnings.
+    ambient_d = 4 * 16 * 16  # 4096 for the standard LatentSR VAE
+    if num_images <= ambient_d:
+        print(
+            f"WARNING: N={num_images} ≤ D={ambient_d} → sample covariance is "
+            f"rank-deficient (rank ≤ N-1). Prefer --num-images 0 (full val).",
+            flush=True,
+        )
+
+    twonn_subsample = int(args.twonn_subsample)
+    twonn_bootstraps = int(args.twonn_bootstraps)
+    if twonn_subsample >= num_images:
+        print(
+            f"WARNING: --twonn-subsample={twonn_subsample} >= N={num_images} → "
+            "TwoNN returns a single full-sample estimate with std=0. "
+            "Use e.g. --twonn-subsample 5000 for mean±std.",
+            flush=True,
+        )
+    elif twonn_bootstraps < 2:
+        print(
+            "WARNING: --twonn-bootstraps < 2 → no TwoNN uncertainty.",
+            flush=True,
+        )
+
+    print(
+        f"num_images={num_images}  batch_size={batch_size}  "
+        f"latent_scale={latent_scale}  num_workers={args.num_workers}",
+        flush=True,
+    )
+    print(
+        f"TwoNN bootstraps={twonn_bootstraps}  subsample={twonn_subsample}",
+        flush=True,
+    )
+    print(f"output_dir={args.output_dir}", flush=True)
+    print(f"val size ≈ {val_n}  batches/epoch ≈ {len(val_loader)}", flush=True)
 
     report = run_representation_geometry(
         vae_a,
@@ -176,8 +221,8 @@ def main() -> None:
         latent_scale=latent_scale,
         baseline_name=args.baseline_name,
         candidate_name=args.candidate_name,
-        twonn_bootstraps=int(args.twonn_bootstraps),
-        twonn_subsample=int(twonn_subsample),
+        twonn_bootstraps=twonn_bootstraps,
+        twonn_subsample=twonn_subsample,
         seed=seed,
         show_progress=True,
     )

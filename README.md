@@ -106,7 +106,8 @@ python scripts/diagnose_z0_recon.py \
   --num-images 64 --seed 42 --no-download
 ```
 
-**Representation geometry** (RiT-style; VAE-1 vs VAE-SR, no diffusion). Prefer `num-images ≥ 2048` so TwoNN / κ are stable at D=4096:
+**Representation geometry** (RiT-style; VAE-1 vs VAE-SR, no diffusion).
+Use the **full val set** (`--num-images 0`) so sample covariance is full-rank at D=4096, and keep `--twonn-subsample 5000` (strictly `< N`) so TwoNN reports real mean±std:
 
 ```bash
 python scripts/diagnose_representation_geometry.py \
@@ -114,7 +115,8 @@ python scripts/diagnose_representation_geometry.py \
   --candidate-vae path/to/vae_sr/latest.pt \
   --config configs/eval_vae.yaml \
   --data-dir data/raw --output-dir outputs/eval_representation_geometry \
-  --num-images 2048 --batch-size 32 --seed 42 --no-download
+  --num-images 0 --batch-size 32 --seed 42 --no-download \
+  --twonn-bootstraps 10 --twonn-subsample 5000
 ```
 
 **Guidance** (frozen VAE-SR + Q2 concat, late window). Confirmatory dose is four jobs, n=256, about 21 s/image with a decoder backward:

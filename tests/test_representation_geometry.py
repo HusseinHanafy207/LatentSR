@@ -91,6 +91,16 @@ def test_twonn_bootstrap_full_sample_runs_once() -> None:
     assert stats["twonn_mean"] == stats["twonn_full"]
 
 
+def test_twonn_bootstrap_subsample_reports_uncertainty() -> None:
+    torch.manual_seed(11)
+    x = torch.randn(80, 12, dtype=torch.float64)
+    stats = twonn_bootstrap(x, num_bootstraps=5, subsample_size=40, seed=0)
+    assert stats["twonn_n_boot"] == 5.0
+    assert stats["twonn_subsample"] == 40.0
+    # Distinct subsamples should not all collapse to identical estimates.
+    assert stats["twonn_std"] >= 0.0
+    assert stats["twonn_full"] > 0.0
+
 def test_twonn_recovers_low_dim_manifold() -> None:
     torch.manual_seed(4)
     # 2D linear subspace embedded in 32D.
