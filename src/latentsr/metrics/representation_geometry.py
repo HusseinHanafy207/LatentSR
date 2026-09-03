@@ -12,6 +12,7 @@ Latents are flattened per image: ``(N, C, H, W) → (N, C·H·W)``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -192,30 +193,44 @@ def excess_kurtosis_stats(x: torch.Tensor) -> dict[str, float]:
     }
 
 
-def _pairwise_nn_ratios(x: torch.Tensor) -> torch.Tensor:
+def _log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def _pairwise_nn_ratios(
+    x: torch.Tensor,
+    *,
+    pbar: tqdm | None = None,
+) -> torch.Tensor:
     """TwoNN ratios μ = r2 / r1 for every point (self-distance excluded)."""
     n = x.shape[0]
     if n < 3:
         raise ValueError(f"TwoNN needs at least 3 samples, got {n}")
-    # Chunked cdist to keep peak memory reasonable for N~5k, D~4k.
-    chunk = max(1, min(512, n))
+    # float32 distances: much cheaper at N~2k, D~4k; ratios stay accurate enough.
+    x32 = x.detach().to(dtype=torch.float32)
+    chunk = max(1, min(256, n))
     ratios = torch.empty(n, dtype=torch.float64)
     for start in range(0, n, chunk):
         stop = min(start + chunk, n)
-        dists = torch.cdist(x[start:stop], x, p=2)
-        # Mask self distances.
+        dists = torch.cdist(x32[start:stop], x32, p=2)
         for i, global_i in enumerate(range(start, stop)):
             dists[i, global_i] = float("inf")
         knn = torch.topk(dists, k=2, largest=False, dim=1).values
         r1 = knn[:, 0].clamp_min(1e-12)
         r2 = knn[:, 1].clamp_min(r1)
-        ratios[start:stop] = r2 / r1
+        ratios[start:stop] = (r2 / r1).double()
+        if pbar is not None:
+            pbar.update(stop - start)
     return ratios
 
 
-def twonn_intrinsic_dim(x: torch.Tensor) -> float:
+def twonn_intrinsic_dim(
+    x: torch.Tensor,
+    *,
+    pbar: tqdm | None = None,
+) -> float:
     """Facco et al. TwoNN MLE: ``d̂ = N / Σ log(r2/r1)``."""
-    ratios = _pairwise_nn_ratios(x)
+    ratios = _pairwise_nn_ratios(x, pbar=pbar)
     logs = ratios.clamp_min(1.0 + 1e-12).log()
     return float(x.shape[0] / logs.sum().clamp_min(1e-12).item())
 
@@ -226,31 +241,61 @@ def twonn_bootstrap(
     num_bootstraps: int = 10,
     subsample_size: int | None = 5000,
     seed: int = 42,
+    show_progress: bool = False,
 ) -> dict[str, float]:
-    """RiT-style TwoNN: mean ± std over independent subsamples."""
+    """RiT-style TwoNN: mean ± std over independent subsamples.
+
+    When ``subsample_size >= N``, a single full-sample estimate is returned
+    (repeating identical full passes is wasted work).
+    """
     n = x.shape[0]
     if n < 3:
         raise ValueError(f"TwoNN needs at least 3 samples, got {n}")
     target = n if subsample_size is None else min(int(subsample_size), n)
     if target < 3:
         raise ValueError(f"subsample_size must be >= 3, got {target}")
+
+    # Single full pass with optional chunk-level progress bar.
+    with (
+        tqdm(total=n, desc="TwoNN (full)", unit="pt", leave=False)
+        if show_progress
+        else contextlib.nullcontext()
+    ) as pbar_full:
+        full = twonn_intrinsic_dim(x, pbar=pbar_full if show_progress else None)
+
+    if target >= n:
+        return {
+            "twonn_mean": full,
+            "twonn_std": 0.0,
+            "twonn_n_boot": 1.0,
+            "twonn_subsample": float(n),
+            "twonn_full": full,
+        }
+
     g = torch.Generator(device="cpu")
     g.manual_seed(int(seed))
     estimates: list[float] = []
-    for _ in range(max(int(num_bootstraps), 1)):
-        if target == n:
-            sample = x
-        else:
-            idx = torch.randperm(n, generator=g)[:target]
-            sample = x[idx]
-        estimates.append(twonn_intrinsic_dim(sample))
+    boot_pbar = (
+        tqdm(
+            range(max(int(num_bootstraps), 1)),
+            desc="TwoNN bootstrap",
+            unit="boot",
+            leave=False,
+        )
+        if show_progress
+        else range(max(int(num_bootstraps), 1))
+    )
+    for _ in boot_pbar:
+        idx = torch.randperm(n, generator=g)[:target]
+        estimates.append(twonn_intrinsic_dim(x[idx]))
+
     vals = torch.tensor(estimates, dtype=torch.float64)
     return {
         "twonn_mean": float(vals.mean().item()),
         "twonn_std": float(vals.std(unbiased=False).item()) if vals.numel() > 1 else 0.0,
         "twonn_n_boot": float(vals.numel()),
         "twonn_subsample": float(target),
-        "twonn_full": float(twonn_intrinsic_dim(x)),
+        "twonn_full": full,
     }
 
 
@@ -262,6 +307,7 @@ def summarize_geometry(
     twonn_subsample: int | None = 5000,
     seed: int = 42,
     top_k_spectrum: int = 256,
+    show_progress: bool = False,
 ) -> dict[str, Any]:
     """Full geometry pack for one latent cloud ``(N, D)``."""
     flat = flatten_latents(x)
@@ -277,6 +323,7 @@ def summarize_geometry(
         num_bootstraps=twonn_bootstraps,
         subsample_size=twonn_subsample,
         seed=seed,
+        show_progress=show_progress,
     )
     k = min(int(top_k_spectrum), d)
     return {
@@ -309,13 +356,16 @@ def collect_vae_latents(
     hr_size: int = 128,
     latent_scale: float = 1.0,
     show_progress: bool = True,
+    desc: str = "encode",
 ) -> dict[str, torch.Tensor]:
     """Encode matched ``(z_hr, z_lr)`` stacks from an SR pair loader."""
     vae.eval()
     z_hr_chunks: list[torch.Tensor] = []
     z_lr_chunks: list[torch.Tensor] = []
     remaining = max(int(num_images), 1)
-    iterator = tqdm(loader, desc="encode", leave=False) if show_progress else loader
+    iterator = (
+        tqdm(loader, desc=desc, total=remaining, leave=True) if show_progress else loader
+    )
     for lr, hr in iterator:
         if remaining <= 0:
             break
@@ -328,12 +378,66 @@ def collect_vae_latents(
         z_hr_chunks.append(z_hr.cpu())
         z_lr_chunks.append(z_lr.cpu())
         remaining -= take
+        if show_progress and hasattr(iterator, "update"):
+            # tqdm total is in images; default step is 1 batch — keep display honest.
+            pass
     if not z_hr_chunks:
         raise ValueError("No latents collected; check num_images / dataloader.")
     return {
         "z_hr": torch.cat(z_hr_chunks, dim=0),
         "z_lr": torch.cat(z_lr_chunks, dim=0),
     }
+
+
+@torch.no_grad()
+def collect_paired_vae_latents(
+    vae_a: VAE,
+    vae_b: VAE,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    num_images: int,
+    hr_size: int = 128,
+    latent_scale: float = 1.0,
+    show_progress: bool = True,
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    """Single data pass: encode the same images with both frozen VAEs."""
+    vae_a.eval()
+    vae_b.eval()
+    a_hr: list[torch.Tensor] = []
+    a_lr: list[torch.Tensor] = []
+    b_hr: list[torch.Tensor] = []
+    b_lr: list[torch.Tensor] = []
+    remaining = max(int(num_images), 1)
+    seen = 0
+    pbar = (
+        tqdm(total=num_images, desc="encode (both VAEs)", unit="img", leave=True)
+        if show_progress
+        else None
+    )
+    for lr, hr in loader:
+        if remaining <= 0:
+            break
+        take = min(lr.shape[0], remaining)
+        lr = lr[:take].to(device)
+        hr = hr[:take].to(device)
+        bicubic = upsample_bicubic(lr, hr_size)
+        a_hr.append(encode_scaled(vae_a, hr, latent_scale=latent_scale).cpu())
+        a_lr.append(encode_scaled(vae_a, bicubic, latent_scale=latent_scale).cpu())
+        b_hr.append(encode_scaled(vae_b, hr, latent_scale=latent_scale).cpu())
+        b_lr.append(encode_scaled(vae_b, bicubic, latent_scale=latent_scale).cpu())
+        remaining -= take
+        seen += take
+        if pbar is not None:
+            pbar.update(take)
+    if pbar is not None:
+        pbar.close()
+    if not a_hr:
+        raise ValueError("No latents collected; check num_images / dataloader.")
+    return (
+        {"z_hr": torch.cat(a_hr, dim=0), "z_lr": torch.cat(a_lr, dim=0)},
+        {"z_hr": torch.cat(b_hr, dim=0), "z_lr": torch.cat(b_lr, dim=0)},
+    )
 
 
 def compare_vae_geometries(
@@ -345,6 +449,7 @@ def compare_vae_geometries(
     twonn_bootstraps: int = 10,
     twonn_subsample: int | None = 5000,
     seed: int = 42,
+    show_progress: bool = False,
 ) -> dict[str, Any]:
     """Geometry for HR and LR latents under two frozen VAEs."""
     spaces = {
@@ -353,16 +458,23 @@ def compare_vae_geometries(
         f"{candidate_name}_hr": candidate_latents["z_hr"],
         f"{candidate_name}_lr": candidate_latents["z_lr"],
     }
-    results = {
-        name: summarize_geometry(
+    results: dict[str, Any] = {}
+    outer = (
+        tqdm(spaces.items(), desc="geometry (4 spaces)", unit="space", leave=True)
+        if show_progress
+        else spaces.items()
+    )
+    for name, z in outer:
+        if show_progress and hasattr(outer, "set_postfix"):
+            outer.set_postfix(space=name)  # type: ignore[union-attr]
+        results[name] = summarize_geometry(
             z,
             name=name,
             twonn_bootstraps=twonn_bootstraps,
             twonn_subsample=twonn_subsample,
             seed=seed,
+            show_progress=show_progress,
         )
-        for name, z in spaces.items()
-    }
     return {
         "baseline_name": baseline_name,
         "candidate_name": candidate_name,
@@ -484,6 +596,23 @@ def plot_geometry_report(report: dict[str, Any], output_dir: str | Path) -> None
     _save_fig(fig, output_dir / "excess_kurtosis_summary.png")
 
 
+def _json_safe(obj: Any) -> Any:
+    """Replace NaN/Inf so metrics.json is strict JSON."""
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float):
+        if obj != obj:
+            return "nan"
+        if obj == float("inf"):
+            return "inf"
+        if obj == float("-inf"):
+            return "-inf"
+        return obj
+    return obj
+
+
 def write_geometry_report(
     report: dict[str, Any],
     output_dir: str | Path,
@@ -492,11 +621,20 @@ def write_geometry_report(
     output_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = output_dir / "metrics.json"
     with metrics_path.open("w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
+        json.dump(_json_safe(report), f, indent=2)
     table = format_geometry_table(report)
     (output_dir / "summary.txt").write_text(table + "\n", encoding="utf-8")
     plot_geometry_report(report, output_dir)
     return metrics_path
+
+
+def _write_status(output_dir: Path, stage: str, **extra: Any) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    payload = _json_safe({"stage": stage, **extra})
+    (output_dir / "status.json").write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def run_representation_geometry(
@@ -517,19 +655,11 @@ def run_representation_geometry(
     show_progress: bool = True,
 ) -> dict[str, Any]:
     """Encode both VAEs on the same images and write the geometry report."""
-    baseline_latents = collect_vae_latents(
+    output_dir = Path(output_dir)
+    _write_status(output_dir, "encoding", num_images=int(num_images))
+    _log(f"Encoding {num_images} val images with both VAEs (single pass)…")
+    baseline_latents, candidate_latents = collect_paired_vae_latents(
         vae_baseline,
-        loader,
-        device=device,
-        num_images=num_images,
-        hr_size=hr_size,
-        latent_scale=latent_scale,
-        show_progress=show_progress,
-    )
-    # Re-create iterator by requiring the caller to pass a fresh loader, or
-    # rewind by collecting again from the same loader object only if it can be
-    # re-iterated. DataLoader is re-iterable; collect again for the candidate.
-    candidate_latents = collect_vae_latents(
         vae_candidate,
         loader,
         device=device,
@@ -544,6 +674,12 @@ def run_representation_geometry(
             f"{tuple(baseline_latents['z_hr'].shape)} vs "
             f"{tuple(candidate_latents['z_hr'].shape)}"
         )
+    _write_status(
+        output_dir,
+        "geometry",
+        num_encoded=int(baseline_latents["z_hr"].shape[0]),
+    )
+    _log("Computing geometry metrics…")
     report = compare_vae_geometries(
         baseline_latents,
         candidate_latents,
@@ -552,6 +688,7 @@ def run_representation_geometry(
         twonn_bootstraps=twonn_bootstraps,
         twonn_subsample=twonn_subsample,
         seed=seed,
+        show_progress=show_progress,
     )
     report["meta"] = {
         "num_images": int(num_images),
@@ -561,5 +698,7 @@ def run_representation_geometry(
         "twonn_bootstraps": int(twonn_bootstraps),
         "twonn_subsample": twonn_subsample,
     }
+    _log("Writing metrics + plots…")
     write_geometry_report(report, output_dir)
+    _write_status(output_dir, "done", metrics="metrics.json")
     return report

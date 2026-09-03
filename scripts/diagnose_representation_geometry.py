@@ -1,4 +1,6 @@
-"""RiT-style geometry: VAE-1 vs VAE-SR latents.
+"""RiT-style geometry: VAE-1 vs VAE-SR latents (no diffusion).
+
+Computes on matched CelebA val images:
 
   - TwoNN intrinsic dimensionality
   - Effective rank
@@ -7,6 +9,8 @@
   - PCA cumulative variance spectrum
 
 For both ``z_hr = encode(HR)`` and ``z_lr = encode(bicubic↑ LR)``.
+
+Example:
 
   python scripts/diagnose_representation_geometry.py \\
     --baseline-vae outputs/vae/checkpoints/checkpoint_epoch_050.pt \\
@@ -22,7 +26,7 @@ from pathlib import Path
 
 import torch
 
-from latentsr.datasets.sr_pairs import get_sr_pair_dataloaders
+from latentsr.datasets.sr_pairs import get_sr_pair_val_dataloader
 from latentsr.metrics.representation_geometry import (
     format_geometry_table,
     run_representation_geometry,
@@ -47,6 +51,12 @@ def parse_args() -> argparse.Namespace:
         help="Val images (TwoNN/κ need ample N; 2048+ recommended for D=4096).",
     )
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="DataLoader workers (0 is safest on Kaggle).",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--latent-scale", type=float, default=None)
@@ -89,6 +99,8 @@ def main() -> None:
     _require_file(args.baseline_vae, "VAE-1 checkpoint")
     _require_file(args.candidate_vae, "VAE-SR checkpoint")
 
+    print(f"device: {device}", flush=True)
+    print(f"loading VAEs…", flush=True)
     vae_a, ckpt_a = load_frozen_vae(args.baseline_vae, map_location=device)
     vae_b, ckpt_b = load_frozen_vae(args.candidate_vae, map_location=device)
     if not is_frozen(vae_a) or not is_frozen(vae_b):
@@ -120,21 +132,38 @@ def main() -> None:
     if twonn_subsample is None:
         twonn_subsample = min(5000, num_images)
 
-    print(f"baseline ({args.baseline_name}): {args.baseline_vae}  epoch={ckpt_a.get('epoch')}")
-    print(f"candidate ({args.candidate_name}): {args.candidate_vae}  epoch={ckpt_b.get('epoch')}")
-    print(f"num_images={num_images}  batch_size={batch_size}  latent_scale={latent_scale}")
-    print(f"TwoNN bootstraps={args.twonn_bootstraps}  subsample={twonn_subsample}")
-    print(f"output_dir={args.output_dir}")
+    print(
+        f"baseline ({args.baseline_name}): {args.baseline_vae}  "
+        f"epoch={ckpt_a.get('epoch')}",
+        flush=True,
+    )
+    print(
+        f"candidate ({args.candidate_name}): {args.candidate_vae}  "
+        f"epoch={ckpt_b.get('epoch')}",
+        flush=True,
+    )
+    print(
+        f"num_images={num_images}  batch_size={batch_size}  "
+        f"latent_scale={latent_scale}  num_workers={args.num_workers}",
+        flush=True,
+    )
+    print(
+        f"TwoNN bootstraps={args.twonn_bootstraps}  subsample={twonn_subsample}",
+        flush=True,
+    )
+    print(f"output_dir={args.output_dir}", flush=True)
+    print("Building val-only CelebA loader (no train split)…", flush=True)
 
-    _, val_loader = get_sr_pair_dataloaders(
+    val_loader = get_sr_pair_val_dataloader(
         batch_size=batch_size,
         data_dir=data_dir,
         hr_size=hr_size,
         lr_size=lr_size,
-        num_workers=int(config.get("num_workers", 2)),
-        pin_memory=bool(config.get("pin_memory", True)),
+        num_workers=int(args.num_workers),
+        pin_memory=bool(config.get("pin_memory", True)) and device.type == "cuda",
         download=bool(args.download),
     )
+    print(f"val size ≈ {len(val_loader.dataset)}  batches/epoch ≈ {len(val_loader)}", flush=True)
 
     report = run_representation_geometry(
         vae_a,
@@ -152,10 +181,13 @@ def main() -> None:
         seed=seed,
         show_progress=True,
     )
-    print()
-    print(format_geometry_table(report))
-    print(f"\nWrote {args.output_dir / 'metrics.json'}")
-    print(f"Plots: pca_*.png, transport_condition_number.png, excess_kurtosis_summary.png")
+    print(flush=True)
+    print(format_geometry_table(report), flush=True)
+    print(f"\nWrote {args.output_dir / 'metrics.json'}", flush=True)
+    print(
+        "Plots: pca_*.png, transport_condition_number.png, excess_kurtosis_summary.png",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

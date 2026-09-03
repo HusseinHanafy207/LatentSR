@@ -98,6 +98,20 @@ def get_sr_pair_datasets(
     )
 
 
+def get_sr_pair_val_dataset(
+    data_dir: str | Path,
+    *,
+    hr_size: int = 128,
+    lr_size: int = 32,
+    download: bool = True,
+) -> SuperResolutionPairDataset:
+    """Val-only SR pair dataset (avoids constructing the CelebA train split)."""
+    val_base = get_celeba_dataset(
+        data_dir, train=False, image_size=hr_size, download=download
+    )
+    return SuperResolutionPairDataset(val_base, hr_size=hr_size, lr_size=lr_size)
+
+
 def get_sr_pair_dataloaders(
     batch_size: int,
     data_dir: str | Path,
@@ -128,3 +142,31 @@ def get_sr_pair_dataloaders(
         val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs
     )
     return train_loader, val_loader
+
+
+def get_sr_pair_val_dataloader(
+    batch_size: int,
+    data_dir: str | Path,
+    *,
+    hr_size: int = 128,
+    lr_size: int = 32,
+    num_workers: int = 0,
+    pin_memory: bool = False,
+    persistent_workers: bool | None = None,
+    download: bool = True,
+) -> DataLoader:
+    """Val-only SR pair loader (skips building the large CelebA train split)."""
+    val_ds = get_sr_pair_val_dataset(
+        data_dir,
+        hr_size=hr_size,
+        lr_size=lr_size,
+        download=download,
+    )
+    loader_kwargs = build_dataloader_kwargs(
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+    )
+    return DataLoader(
+        val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs
+    )

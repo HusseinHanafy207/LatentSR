@@ -18,6 +18,7 @@ from latentsr.metrics.representation_geometry import (
     pca_eigenvalues,
     run_representation_geometry,
     transport_condition_numbers,
+    twonn_bootstrap,
     twonn_intrinsic_dim,
     write_geometry_report,
 )
@@ -79,6 +80,15 @@ def test_gaussian_low_excess_kurtosis() -> None:
     stats = excess_kurtosis_stats(x)
     assert stats["median_abs_kurtosis"] < 0.3
     assert stats["frac_abs_lt_0_5"] > 0.8
+
+
+def test_twonn_bootstrap_full_sample_runs_once() -> None:
+    torch.manual_seed(7)
+    x = torch.randn(30, 8, dtype=torch.float64)
+    stats = twonn_bootstrap(x, num_bootstraps=10, subsample_size=30, seed=0)
+    assert stats["twonn_n_boot"] == 1.0
+    assert stats["twonn_std"] == 0.0
+    assert stats["twonn_mean"] == stats["twonn_full"]
 
 
 def test_twonn_recovers_low_dim_manifold() -> None:
