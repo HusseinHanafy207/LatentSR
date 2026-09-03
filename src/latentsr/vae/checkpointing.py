@@ -36,5 +36,6 @@ def load_vae_checkpoint(
     build_cfg = {**config, **arch}
     model = build_vae_from_config(build_cfg)
     model.load_state_dict(checkpoint["model_state_dict"])
+    model.to(map_location)
     model.eval()
     return model, checkpoint
