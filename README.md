@@ -119,6 +119,23 @@ python scripts/diagnose_representation_geometry.py \
   --twonn-bootstraps 10 --twonn-subsample 5000
 ```
 
+**Collapse ↔ local geometry** (Phase 1.5; exploratory). Per-image
+`C_i = cos(ẑ0(t_peak), z_lr) − cos(ẑ0(0), z_lr)` from the reverse chain, then
+Pearson/Spearman vs leave-one-out k-NN local erank / κ / density around each `z_lr`.
+`--reference-images` can exceed `--num-images` for a denser neighbor cloud:
+
+```bash
+python scripts/diagnose_collapse_geometry.py \
+  --config configs/eval_sr.yaml \
+  --baseline-sr path/to/vae1_sr/latest.pt \
+  --baseline-vae path/to/vae/checkpoint_epoch_050.pt \
+  --candidate-sr path/to/latent_sr_q2/latest.pt \
+  --candidate-vae path/to/vae_sr/latest.pt \
+  --output-dir outputs/eval_collapse_geometry \
+  --num-images 64 --reference-images 512 --knn 32 \
+  --batch-size 4 --seed 42 --no-download
+```
+
 **Guidance** (frozen VAE-SR + Q2 concat, late window). Confirmatory dose is four jobs, n=256, about 21 s/image with a decoder backward:
 
 ```bash
