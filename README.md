@@ -121,8 +121,11 @@ python scripts/diagnose_representation_geometry.py \
 
 **Collapse ↔ local geometry** (Phase 1.5; exploratory). Per-image
 `C_i = cos(ẑ0(t_peak), z_lr) − cos(ẑ0(0), z_lr)` from the reverse chain, then
-Pearson/Spearman vs leave-one-out k-NN local erank / κ / density around each `z_lr`.
-`--reference-images` can exceed `--num-images` for a denser neighbor cloud:
+Pearson/Spearman (+ bootstrap CI) vs leave-one-out k-NN local erank / κ / density.
+Also decodes the **same** reverse samples and correlates density / mean_knn with
+PSNR and LPIPS, plus paired **Δgeometry ↔ ΔPSNR/ΔLPIPS** (VAE-SR − VAE-1).
+Bootstrap CIs default to 1000 image-level resamples. Pass `--robustness` for a
+small `(k, reference_n)` sweep without re-running reverse:
 
 ```bash
 python scripts/diagnose_collapse_geometry.py \
@@ -132,8 +135,16 @@ python scripts/diagnose_collapse_geometry.py \
   --candidate-sr path/to/latent_sr_q2/latest.pt \
   --candidate-vae path/to/vae_sr/latest.pt \
   --output-dir outputs/eval_collapse_geometry \
-  --num-images 64 --reference-images 512 --knn 32 \
+  --num-images 64 --reference-images 512 --knn 32 --n-boot 1000 --robustness \
   --batch-size 4 --seed 42 --no-download
+```
+
+Bootstrap-only refresh from an existing CSV (no reverse; skips quality if those columns are absent):
+
+```bash
+python scripts/diagnose_collapse_geometry.py \
+  --from-csv outputs/eval_collapse_geometry/collapse_geometry_per_image.csv \
+  --output-dir outputs/eval_collapse_geometry_boot --n-boot 1000 --seed 42
 ```
 
 **Guidance** (frozen VAE-SR + Q2 concat, late window). Confirmatory dose is four jobs, n=256, about 21 s/image with a decoder backward:
