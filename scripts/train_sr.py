@@ -89,7 +89,15 @@ def main() -> None:
         latent_scale=float(config.get("latent_scale", 1.0)),
         hr_size=int(config.get("hr_size", 128)),
         map_location="cpu",
+        whiten_path=config.get("zlr_whiten_path"),
     )
+    if sr_encoder.whitener is not None:
+        print(
+            f"condition whitening: {config.get('zlr_whiten_path')}  "
+            f"mode={sr_encoder.whitener.mode}  eps={sr_encoder.whitener.eps}"
+        )
+    else:
+        print("condition whitening: off (raw z_lr)")
     model = build_conditioned_latent_ddpm_from_config(config)
     n_params = sum(p.numel() for p in model.parameters())
     print(

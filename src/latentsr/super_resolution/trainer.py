@@ -162,6 +162,7 @@ class LatentSRTrainer:
             "config": self.config,
             "vae_checkpoint": self.config.get("vae_checkpoint"),
             "latent_scale": self.config.get("latent_scale", 1.0),
+            "zlr_whiten_path": self.config.get("zlr_whiten_path"),
         }
         latest_path = self.checkpoint_dir / "latest.pt"
         torch.save(checkpoint, latest_path)
@@ -269,17 +270,19 @@ class LatentSRTrainer:
         lr, hr = next(iter(self.val_loader))
         lr = lr[:num_images].to(self.device)
         hr = hr[:num_images].to(self.device)
-        z_lr, _z_hr = self.sr_encoder(lr, hr)
+        z_lr_cond, _z_hr = self.sr_encoder(lr, hr)
+        z_lr_raw = self.sr_encoder.encode_lr_raw(lr)
         latent_scale = float(self.config.get("latent_scale", 1.0))
         hr_size = int(self.config.get("hr_size", 128))
 
         bicubic = upsample_bicubic(lr, hr_size)
-        soft = decode_scaled(self.sr_encoder.vae, z_lr, latent_scale)
+        # Soft-decode always uses raw (unwhitened) z_lr.
+        soft = decode_scaled(self.sr_encoder.vae, z_lr_raw, latent_scale)
         # Short progress bar off for periodic grids during training.
         pred = sample_sr_images(
             self.model,
             self.sr_encoder.vae,
-            z_lr,
+            z_lr_cond,
             latent_scale=latent_scale,
             show_progress=False,
         )

@@ -21,6 +21,7 @@ import torch.nn.functional as F
 from latentsr.datasets.onthefly_latent import OnTheFlyLatentEncoder
 from latentsr.vae.latent import is_frozen, load_frozen_vae
 from latentsr.vae.vae import VAE
+from latentsr.vae.whitening import ChannelWhitening, load_channel_whitening
 
 
 def upsample_bicubic(lr: torch.Tensor, hr_size: int) -> torch.Tensor:
@@ -46,7 +47,11 @@ def upsample_bicubic(lr: torch.Tensor, hr_size: int) -> torch.Tensor:
 
 
 class OnTheFlySRLatentEncoder:
-    """Frozen VAE wrapper that maps ``(lr, hr)`` batches to ``(z_lr, z_hr)``."""
+    """Frozen VAE wrapper that maps ``(lr, hr)`` batches to ``(z_lr, z_hr)``.
+
+    Optional ``whitener`` is applied to **z_lr only** (condition). HR targets
+    stay raw. Soft-decode must use ``encode_lr_raw`` / unwhitened latents.
+    """
 
     def __init__(
         self,
@@ -54,6 +59,7 @@ class OnTheFlySRLatentEncoder:
         *,
         latent_scale: float = 1.0,
         hr_size: int = 128,
+        whitener: ChannelWhitening | None = None,
     ) -> None:
         if not is_frozen(vae):
             raise ValueError(
@@ -64,6 +70,7 @@ class OnTheFlySRLatentEncoder:
             raise ValueError(f"latent_scale must be > 0, got {latent_scale}")
         self.encoder = OnTheFlyLatentEncoder(vae, latent_scale=latent_scale)
         self.hr_size = int(hr_size)
+        self.whitener = whitener
 
     @classmethod
     def from_checkpoint(
@@ -73,9 +80,15 @@ class OnTheFlySRLatentEncoder:
         latent_scale: float = 1.0,
         hr_size: int = 128,
         map_location: str | torch.device = "cpu",
+        whitener: ChannelWhitening | None = None,
+        whiten_path: str | Path | None = None,
     ) -> OnTheFlySRLatentEncoder:
         vae, _ = load_frozen_vae(checkpoint, map_location=map_location)
-        return cls(vae, latent_scale=latent_scale, hr_size=hr_size)
+        if whitener is None and whiten_path is not None:
+            whitener = load_channel_whitening(whiten_path)
+        return cls(
+            vae, latent_scale=latent_scale, hr_size=hr_size, whitener=whitener
+        )
 
     def to(self, device: torch.device | str) -> OnTheFlySRLatentEncoder:
         self.encoder.to(device)
@@ -96,18 +109,29 @@ class OnTheFlySRLatentEncoder:
     def latent_channels(self) -> int:
         return self.encoder.latent_channels
 
+    def encode_lr_raw(self, lr: torch.Tensor) -> torch.Tensor:
+        """Bicubic↑ + encode; **no** whitening (for soft-decode / guidance)."""
+        lr_up = upsample_bicubic(lr, self.hr_size)
+        return self.encoder(lr_up)
+
+    def condition_from_raw(self, z_lr_raw: torch.Tensor) -> torch.Tensor:
+        """Apply frozen whitener to a raw LR latent (identity if unset)."""
+        if self.whitener is None:
+            return z_lr_raw
+        return self.whitener.transform(z_lr_raw)
+
     def __call__(
         self, lr: torch.Tensor, hr: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encode LR/HR images → scaled latents of matching spatial size."""
+        """Encode LR/HR → ``(z_lr_cond, z_hr_raw)`` of matching spatial size."""
         if hr.shape[-2:] != (self.hr_size, self.hr_size):
             raise ValueError(
                 f"Expected HR spatial {(self.hr_size, self.hr_size)}, "
                 f"got {tuple(hr.shape[-2:])}"
             )
-        lr_up = upsample_bicubic(lr, self.hr_size)
-        z_lr = self.encoder(lr_up)
+        z_lr_raw = self.encode_lr_raw(lr)
         z_hr = self.encoder(hr)
+        z_lr = self.condition_from_raw(z_lr_raw)
         if z_lr.shape != z_hr.shape:
             raise RuntimeError(
                 f"Latent shape mismatch: z_lr {tuple(z_lr.shape)} vs "
@@ -118,7 +142,7 @@ class OnTheFlySRLatentEncoder:
     def encode_batch(
         self, batch: Any, device: torch.device | None = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encode a dataloader ``(lr, hr)`` batch."""
+        """Encode a dataloader ``(lr, hr)`` batch → whitened cond + raw HR."""
         if not isinstance(batch, (list, tuple)) or len(batch) < 2:
             raise TypeError("Expected batch to be (lr, hr, …)")
         lr, hr = batch[0], batch[1]

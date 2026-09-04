@@ -23,6 +23,7 @@ from latentsr.super_resolution.condition import (
 from latentsr.super_resolution.sample import sample_sr_images
 from latentsr.vae.latent import decode_scaled, encode_scaled, load_frozen_vae
 from latentsr.vae.vae import VAE
+from latentsr.vae.whitening import ChannelWhitening, load_channel_whitening
 
 
 def load_sr_components(
@@ -30,6 +31,7 @@ def load_sr_components(
     *,
     vae_checkpoint: str | Path | None = None,
     map_location: str | torch.device = "cpu",
+    whiten_path: str | Path | None = None,
 ) -> tuple[ConditionalLatentDDPM, VAE, dict[str, Any]]:
     """Load conditioned SR DDPM + frozen VAE; VAE path falls back to ckpt metadata."""
     model, checkpoint = load_conditioned_latent_ddpm_checkpoint(
@@ -61,6 +63,13 @@ def load_sr_components(
         checkpoint.get("latent_scale", config.get("latent_scale", 1.0))
     )
     vae, _vae_ckpt = load_frozen_vae(vae_path, map_location=map_location)
+    whiten_resolved = (
+        whiten_path
+        if whiten_path is not None
+        else checkpoint.get("zlr_whiten_path")
+        or config.get("zlr_whiten_path")
+    )
+    whitener = load_channel_whitening(whiten_resolved)
     meta = {
         "config": config,
         "latent_scale": latent_scale,
@@ -68,6 +77,8 @@ def load_sr_components(
         "sr_epoch": checkpoint.get("epoch"),
         "hr_size": int(config.get("hr_size", 128)),
         "lr_size": int(config.get("lr_size", 32)),
+        "zlr_whiten_path": str(whiten_resolved) if whiten_resolved else None,
+        "whitener": whitener,
     }
     return model, vae, meta
 
@@ -79,10 +90,19 @@ def encode_lr_latents(
     *,
     hr_size: int = 128,
     latent_scale: float = 1.0,
+    whitener: ChannelWhitening | None = None,
+    apply_whiten: bool = True,
 ) -> torch.Tensor:
-    """``LR → upsample_hr → encode_scaled`` (same conditioning as training)."""
+    """``LR → upsample_hr → encode_scaled`` (+ optional condition whitening).
+
+    Soft-decode / guidance must use ``apply_whiten=False`` (raw posterior mean).
+    Matched whitened DDPMs must use ``apply_whiten=True`` for the UNet condition.
+    """
     lr_up = upsample_bicubic(lr, hr_size)
-    return encode_scaled(vae, lr_up, latent_scale=latent_scale)
+    z = encode_scaled(vae, lr_up, latent_scale=latent_scale)
+    if whitener is not None and apply_whiten:
+        z = whitener.transform(z)
+    return z
 
 
 @torch.no_grad()
@@ -97,10 +117,16 @@ def super_resolve(
     val_indices: list[int] | None = None,
     noise_seed: int | None = None,
     show_progress: bool = True,
+    whitener: ChannelWhitening | None = None,
 ) -> torch.Tensor:
     """Super-resolve an LR batch ``(B, 3, lr, lr)`` → HR ``(B, 3, hr, hr)``."""
     z_lr = encode_lr_latents(
-        vae, lr, hr_size=hr_size, latent_scale=latent_scale
+        vae,
+        lr,
+        hr_size=hr_size,
+        latent_scale=latent_scale,
+        whitener=whitener,
+        apply_whiten=True,
     )
     return sample_sr_images(
         model,

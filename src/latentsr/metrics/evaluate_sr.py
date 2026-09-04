@@ -28,6 +28,7 @@ from latentsr.super_resolution.inference import encode_lr_latents, save_sr_compa
 from latentsr.super_resolution.sample import sample_conditional_latents
 from latentsr.vae.latent import decode_scaled, encode_scaled
 from latentsr.vae.vae import VAE
+from latentsr.vae.whitening import ChannelWhitening
 
 
 def _latent_pair_stats(
@@ -60,11 +61,15 @@ def evaluate_sr(
     output_dir: str | Path | None = None,
     noise_seed: int = 42,
     start_index: int = 0,
+    whitener: ChannelWhitening | None = None,
 ) -> dict[str, Any]:
     """Evaluate bicubic + soft decode vs LatentSR on a val loader.
 
     Reverse-diffusion noise is generated per ``val_index`` from ``noise_seed``,
     so pairing two checkpoints does not depend on batch size.
+
+    Soft-decode always uses **raw** ``z_lr``. The UNet condition uses whitened
+    ``z_lr`` when ``whitener`` is set (matched whitened DDPM).
     """
     model.eval()
     vae.eval()
@@ -93,18 +98,25 @@ def evaluate_sr(
 
         bicubic = upsample_bicubic(lr, hr_size)
         z_hr = encode_scaled(vae, hr, latent_scale=latent_scale)
-        z_lr = encode_lr_latents(
-            vae, lr, hr_size=hr_size, latent_scale=latent_scale
+        z_lr_raw = encode_lr_latents(
+            vae,
+            lr,
+            hr_size=hr_size,
+            latent_scale=latent_scale,
+            apply_whiten=False,
+        )
+        z_lr_cond = (
+            whitener.transform(z_lr_raw) if whitener is not None else z_lr_raw
         )
         z_sr = sample_conditional_latents(
             model,
-            z_lr,
+            z_lr_cond,
             val_indices=indices,
             noise_seed=noise_seed,
             show_progress=False,
         )
         pred = decode_scaled(vae, z_sr, latent_scale=latent_scale).clamp(0.0, 1.0)
-        soft = decode_scaled(vae, z_lr, latent_scale=latent_scale).clamp(0.0, 1.0)
+        soft = decode_scaled(vae, z_lr_raw, latent_scale=latent_scale).clamp(0.0, 1.0)
 
         methods = {"bicubic": bicubic, "soft_decode": soft, "latentsr": pred}
         batch_metric_tensors: dict[str, dict[str, torch.Tensor]] = {}
@@ -114,7 +126,8 @@ def evaluate_sr(
             for key, values in metrics.items():
                 scores[name][key].extend(values.detach().cpu().tolist())
 
-        z_lr_stats = _latent_pair_stats(z_lr, z_hr)
+        # Latent distances stay in raw space for soft-decode comparability.
+        z_lr_stats = _latent_pair_stats(z_lr_raw, z_hr)
         z_sr_stats = _latent_pair_stats(z_sr, z_hr)
         hr_edge = sobel_magnitude(hr).mean(dim=(1, 2, 3))
 

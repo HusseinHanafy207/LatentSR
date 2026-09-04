@@ -1,0 +1,54 @@
+# Matched LatentSR on VAE-SR with **channel-whitened** z_lr conditions.
+# Identical to latent_sr_q2.yaml except zlr_whiten_path + output dirs.
+# Fit whitening first (train-only):
+#   python scripts/fit_channel_whitening.py --vae-checkpoint ... --output ... --eps 1e-4
+# Then verify geometry before training:
+#   python scripts/verify_channel_whitening.py --candidate-vae ... --whiten-candidate ...
+
+dataset: CelebA
+data_dir: /kaggle/working/data/raw
+hr_size: 128
+lr_size: 32
+
+vae_checkpoint: /kaggle/working/outputs/vae_sr/checkpoints/latest.pt
+latent_scale: 1.0
+
+# Frozen channel ZCA fit on TRAIN z_lr only (never val).
+zlr_whiten_path: /kaggle/working/outputs/whitening/vae_sr_channel_zca_eps1e-4.pt
+
+latent_channels: 4
+latent_size: 32
+base_channels: 64
+channel_mult: [1, 2, 4]
+num_res_blocks: 2
+attention_resolutions: [16, 8]
+dropout: 0.1
+
+num_timesteps: 1000
+beta_start: 0.0001
+beta_end: 0.02
+
+batch_size: 64
+epochs: 50
+learning_rate: 0.0002
+optimizer: Adam
+num_workers: 2
+pin_memory: true
+amp: true
+validate_every: 5
+checkpoint_every: 1
+sample_every: 25
+sample_images: 4
+
+device: auto
+
+checkpoint_dir: /kaggle/working/outputs/latent_sr_q2_whiten/checkpoints
+sample_dir: /kaggle/working/outputs/latent_sr_q2_whiten/samples
+log_dir: /kaggle/working/outputs/latent_sr_q2_whiten/logs
+train_metrics_file: train_metrics.csv
+val_metrics_file: val_metrics.csv
+
+hf_checkpoint_repo: HusseinHamouda/LatentSR-checkpoints
+hf_checkpoint_subdir: latent_sr_q2_whiten
+
+seed: 42

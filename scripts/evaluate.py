@@ -62,6 +62,12 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=False,
     )
+    parser.add_argument(
+        "--whiten-path",
+        type=Path,
+        default=None,
+        help="Override zlr_whiten_path from the SR checkpoint config.",
+    )
     return parser.parse_args()
 
 
@@ -86,6 +92,7 @@ def main() -> None:
             args.checkpoint,
             vae_checkpoint=args.vae_checkpoint,
             map_location=device,
+            whiten_path=args.whiten_path,
         )
     except FileNotFoundError as exc:
         raise SystemExit(str(exc)) from exc
@@ -95,6 +102,7 @@ def main() -> None:
     hr_size = int(merged.get("hr_size", meta["hr_size"]))
     lr_size = int(merged.get("lr_size", meta["lr_size"]))
     latent_scale = float(merged.get("latent_scale", meta["latent_scale"]))
+    whitener = meta.get("whitener")
     num_images = int(
         args.num_images
         if args.num_images is not None
@@ -125,6 +133,13 @@ def main() -> None:
     print(f"SR epoch: {meta.get('sr_epoch')}")
     print(f"VAE: {meta['vae_checkpoint']}")
     print(f"latent_scale: {latent_scale}")
+    if whitener is not None:
+        print(
+            f"condition whitening: {meta.get('zlr_whiten_path')}  "
+            f"mode={whitener.mode}  eps={whitener.eps}"
+        )
+    else:
+        print("condition whitening: off")
     print(f"data_dir: {data_dir}")
     print(f"Evaluating {num_images} val images on {device} …")
     print(
@@ -159,6 +174,7 @@ def main() -> None:
             grid_images=int(args.grid_images),
             output_dir=output_dir,
             noise_seed=int(args.seed),
+            whitener=whitener,
         )
     except ImportError as exc:
         if args.lpips:

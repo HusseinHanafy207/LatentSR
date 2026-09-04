@@ -139,13 +139,29 @@ python scripts/diagnose_collapse_geometry.py \
   --batch-size 4 --seed 42 --no-download
 ```
 
-Bootstrap-only refresh from an existing CSV (no reverse; skips quality if those columns are absent):
+**Channel whitening** (condition-only ZCA; fit on **train** `z_lr`, never val).
+Verify geometry before any DDPM retrain — do **not** plug whitened conditions into an
+old raw-trained DDPM:
 
 ```bash
-python scripts/diagnose_collapse_geometry.py \
-  --from-csv outputs/eval_collapse_geometry/collapse_geometry_per_image.csv \
-  --output-dir outputs/eval_collapse_geometry_boot --n-boot 1000 --seed 42
+# 1) Fit on VAE-SR train latents
+python scripts/fit_channel_whitening.py \
+  --vae-checkpoint path/to/vae_sr/latest.pt \
+  --config configs/latent_sr_q2.yaml \
+  --output outputs/whitening/vae_sr_channel_zca_eps1e-4.pt \
+  --eps 1e-4 --mode zca --max-images 50000 --no-download
+
+# 2) Verify κ↓ / erank↑ on val (raw vs white)
+python scripts/verify_channel_whitening.py \
+  --candidate-vae path/to/vae_sr/latest.pt \
+  --whiten-candidate outputs/whitening/vae_sr_channel_zca_eps1e-4.pt \
+  --num-images 2048 --no-download
+
+# 3) Matched retrain (only difference = whitened condition)
+python scripts/train_sr.py --config configs/latent_sr_q2_whiten.yaml --no-download
 ```
+
+Ablation ladder: `raw` → `--mode standardize` → `--mode zca` (4×4) → later patch/global.
 
 **Guidance** (frozen VAE-SR + Q2 concat, late window). Confirmatory dose is four jobs, n=256, about 21 s/image with a decoder backward:
 
