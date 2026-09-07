@@ -222,3 +222,66 @@ def test_run_collapse_geometry_end_to_end(tmp_path: Path) -> None:
     assert "pearson_lo" in dens and "pearson_hi" in dens
     assert (tmp_path / "collapse_geometry_per_image.csv").is_file()
     assert (tmp_path / "delta_geometry_vs_delta_quality.png").is_file()
+
+
+def test_collapse_whitener_matches_protocol(tmp_path: Path) -> None:
+    """With whitener, reported cos_peak / cos_t0 / collapse use whitened z_lr."""
+    from latentsr.super_resolution.inference import encode_lr_latents
+    from latentsr.vae.whitening import fit_channel_whitening
+
+    torch.manual_seed(3)
+    model = build_conditioned_latent_ddpm_from_config(_tiny_concat_config())
+    vae = VAE(base_channels=32, num_res_blocks=1)
+    freeze_vae(vae)
+    lr = torch.rand(6, 3, 32, 32)
+    hr = torch.rand(6, 3, 128, 128)
+    loader = DataLoader(TensorDataset(lr, hr), batch_size=2)
+    z = encode_lr_latents(
+        vae, lr[:2], hr_size=128, latent_scale=1.0, apply_whiten=False
+    )
+    acc = fit_channel_whitening(num_channels=4, eps=1e-4, mode="zca")
+    acc.update(z)
+    whitener = acc.finalize()
+
+    raw = run_collapse_geometry(
+        {"vae_sr": model},
+        {"vae_sr": vae},
+        loader,
+        device=torch.device("cpu"),
+        num_images=4,
+        reference_images=4,
+        knn=2,
+        hr_size=128,
+        noise_seed=11,
+        n_boot=10,
+        compute_image_metrics=False,
+        compute_lpips=False,
+        candidate_name="vae_sr",
+        show_progress=False,
+    )
+    white = run_collapse_geometry(
+        {"vae_sr_white": model},
+        {"vae_sr_white": vae},
+        loader,
+        device=torch.device("cpu"),
+        num_images=4,
+        reference_images=4,
+        knn=2,
+        hr_size=128,
+        noise_seed=11,
+        n_boot=10,
+        compute_image_metrics=False,
+        compute_lpips=False,
+        candidate_name="vae_sr_white",
+        whiteners={"vae_sr_white": whitener},
+        output_dir=tmp_path,
+        show_progress=False,
+    )
+    assert white["models"]["vae_sr_white"]["whitener"] is True
+    assert raw["models"]["vae_sr"]["whitener"] is False
+    # Peak / t0 / collapse exist and differ once condition is whitened.
+    for key in ("cos_peak_mean", "cos_t0_mean", "collapse_mean"):
+        assert key in white["models"]["vae_sr_white"]
+        assert abs(
+            raw["models"]["vae_sr"][key] - white["models"]["vae_sr_white"][key]
+        ) > 1e-5

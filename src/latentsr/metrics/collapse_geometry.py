@@ -1,21 +1,3 @@
-"""Phase 1.5: correlate late reverse-chain collapse with local z_lr geometry.
-
-For each image:
-
-    C_i = cos(ẑ0(t_peak), z_lr) − cos(ẑ0(0), z_lr)
-
-Higher C_i ⇒ stronger late-stage collapse of the mid-chain copy.
-
-Local geometry around each z_lr (leave-one-out k-NN in a reference cloud):
-
-    local effective rank, local κ, neighborhood density, NN distance.
-
-Also scores final LatentSR decode vs HR (PSNR / LPIPS) on the **same**
-reverse samples, and bootstraps correlation CIs (image-level resample).
-
-Exploratory / correlational — not causal.
-"""
-
 from __future__ import annotations
 
 import csv
@@ -45,6 +27,7 @@ from latentsr.super_resolution.sample import (
 )
 from latentsr.vae.latent import decode_scaled
 from latentsr.vae.vae import VAE
+from latentsr.vae.whitening import ChannelWhitening
 
 
 _GEOM_KEYS = (
@@ -201,8 +184,12 @@ def collect_z_lr_bank(
     latent_scale: float = 1.0,
     start_index: int = 0,
     show_progress: bool = True,
+    whitener: ChannelWhitening | None = None,
 ) -> tuple[torch.Tensor, list[int]]:
-    """Encode ``z_lr`` for ``num_images`` val pairs; return ``(N,C,H,W), indices``."""
+    """Encode ``z_lr`` for ``num_images`` val pairs; return ``(N,C,H,W), indices``.
+
+    When ``whitener`` is set, returns the condition the model sees (whitened).
+    """
     vae.eval()
     chunks: list[torch.Tensor] = []
     indices: list[int] = []
@@ -218,7 +205,14 @@ def collect_z_lr_bank(
             break
         take = min(lr.shape[0], remaining)
         lr = lr[:take].to(device)
-        z = encode_lr_latents(vae, lr, hr_size=hr_size, latent_scale=latent_scale)
+        z_raw = encode_lr_latents(
+            vae,
+            lr,
+            hr_size=hr_size,
+            latent_scale=latent_scale,
+            apply_whiten=False,
+        )
+        z = whitener.transform(z_raw) if whitener is not None else z_raw
         chunks.append(z.cpu())
         indices.extend(range(next_index, next_index + take))
         remaining -= take
@@ -248,11 +242,15 @@ def reverse_cosine_curves(
     compute_image_metrics: bool = True,
     compute_lpips: bool = True,
     lpips_fn: LPIPSMetric | None = None,
+    whitener: ChannelWhitening | None = None,
 ) -> dict[str, Any]:
-    """Run the reverse chain; return cos curves, z_lr, and optional PSNR/LPIPS.
+    """Run the reverse chain; return cos curves, z_lr_cond, and optional PSNR/LPIPS.
 
     Final decode uses the same seeded reverse trajectory as the cosine log
     (``x`` after ``t=0``), matching ``sample_conditional_latents``.
+
+    Cosine is vs the condition the model sees (whitened if ``whitener`` is set).
+    Soft-decode is never done here; image metrics decode the final sample ``x``.
     """
     model.eval()
     vae.eval()
@@ -282,10 +280,15 @@ def reverse_cosine_curves(
         lr = lr[:take].to(device)
         hr_b = hr[:take].to(device)
         batch_idx = list(range(next_index, next_index + take))
-        z_lr = encode_lr_latents(
-            vae, lr, hr_size=hr_size, latent_scale=latent_scale
+        z_lr_raw = encode_lr_latents(
+            vae,
+            lr,
+            hr_size=hr_size,
+            latent_scale=latent_scale,
+            apply_whiten=False,
         )
-        x = seeded_noise_like(z_lr, batch_idx, base_seed=noise_seed, salt=0)
+        z_lr = whitener.transform(z_lr_raw) if whitener is not None else z_lr_raw
+        x = seeded_noise_like(z_lr_raw, batch_idx, base_seed=noise_seed, salt=0)
         cos_hist = torch.empty(take, num_t, dtype=torch.float32)
 
         for t in range(num_t - 1, -1, -1):
@@ -893,6 +896,7 @@ def run_collapse_geometry(
     candidate_name: str | None = None,
     knn_grid: list[int] | None = None,
     reference_grid: list[int] | None = None,
+    whiteners: dict[str, ChannelWhitening | None] | None = None,
     output_dir: str | Path | None = None,
     show_progress: bool = True,
 ) -> dict[str, Any]:
@@ -900,6 +904,9 @@ def run_collapse_geometry(
 
     ``models`` / ``vaes`` share keys (e.g. ``vae1``, ``vae_sr``). Each model is
     paired with its VAE. Reference cloud size defaults to ``num_images``.
+
+    Optional ``whiteners[name]`` applies to that model's condition only (matched
+    whitened DDPM). Cosine / local geometry then use whitened ``z_lr``.
 
     Optional ``knn_grid`` / ``reference_grid`` recompute neighborhood geometry
     only (no extra reverse) for a small robustness sweep.
@@ -909,6 +916,7 @@ def run_collapse_geometry(
     if set(models) != set(vaes):
         raise ValueError("models and vaes must share the same keys")
     latent_scales = latent_scales or {k: 1.0 for k in models}
+    whiteners = whiteners or {}
     names = list(models.keys())
     if baseline_name is None:
         baseline_name = names[0]
@@ -939,8 +947,13 @@ def run_collapse_geometry(
         model = models[name]
         vae = vaes[name]
         scale = float(latent_scales.get(name, 1.0))
+        whitener = whiteners.get(name)
         if show_progress:
-            print(f"[{name}] reverse cosine curves (n={num_images})…", flush=True)
+            whiten_tag = "whiten=on" if whitener is not None else "whiten=off"
+            print(
+                f"[{name}] reverse cosine curves (n={num_images}, {whiten_tag})…",
+                flush=True,
+            )
         packed = reverse_cosine_curves(
             model,
             vae,
@@ -955,6 +968,7 @@ def run_collapse_geometry(
             compute_image_metrics=compute_image_metrics,
             compute_lpips=compute_lpips,
             lpips_fn=lpips_fn,
+            whitener=whitener,
         )
         cos = packed["cos"]
         idx = packed["indices"]
@@ -975,6 +989,7 @@ def run_collapse_geometry(
                 latent_scale=scale,
                 start_index=start_index,
                 show_progress=show_progress,
+                whitener=whitener,
             )
 
         mean_curve = cos.mean(dim=0)
@@ -1068,6 +1083,7 @@ def run_collapse_geometry(
             "global_t_peak": global_t_peak,
             "cos_peak_mean": float(stats["cos_peak"].mean().item()),
             "cos_t0_mean": float(stats["cos_t0"].mean().item()),
+            "whitener": whitener is not None,
             "correlations": corr,
             "correlations_fixed_peak": corr_fixed,
             "reference_indices_head": ref_idx[: min(8, len(ref_idx))],

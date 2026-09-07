@@ -140,28 +140,50 @@ python scripts/diagnose_collapse_geometry.py \
 ```
 
 **Channel whitening** (condition-only ZCA; fit on **train** `z_lr`, never val).
-Verify geometry before any DDPM retrain — do **not** plug whitened conditions into an
-old raw-trained DDPM:
+Then **evaluate** — do not keep training until the decisive comparison is in.
+
+Decisive question: **raw VAE-SR condition vs whitened VAE-SR condition** on the
+same images and same reverse-process noise (PSNR, LPIPS, reverse alignment,
+peak / \(t=0\) cosine, collapse), **after** verifying whitening changed geometry
+(κ↓, erank↑, PCA less concentrated).
 
 ```bash
 # 1) Fit on VAE-SR train latents
 python scripts/fit_channel_whitening.py \
-  --vae-checkpoint path/to/vae_sr/latest.pt \
+  --vae-checkpoint /kaggle/working/hf_ckpt/vae_sr/latest.pt \
   --config configs/latent_sr_q2.yaml \
-  --output outputs/whitening/vae_sr_channel_zca_eps1e-4.pt \
+  --output /kaggle/working/outputs/whitening/vae_sr_channel_zca_eps1e-4.pt \
   --eps 1e-4 --mode zca --max-images 50000 --no-download
 
-# 2) Verify κ↓ / erank↑ on val (raw vs white)
+# 2) Geometry gate only (κ↓ / erank↑ / PCA less concentrated)
 python scripts/verify_channel_whitening.py \
-  --candidate-vae path/to/vae_sr/latest.pt \
-  --whiten-candidate outputs/whitening/vae_sr_channel_zca_eps1e-4.pt \
-  --num-images 2048 --no-download
+  --candidate-vae /kaggle/working/hf_ckpt/vae_sr/latest.pt \
+  --whiten-candidate /kaggle/working/outputs/whitening/vae_sr_channel_zca_eps1e-4.pt \
+  --num-images 2048 --no-download \
+  --output-dir /kaggle/working/outputs/eval_whitening_verify
 
-# 3) Matched retrain (only difference = whitened condition)
+# 3) Matched retrain (only if geometry gate passed)
 python scripts/train_sr.py --config configs/latent_sr_q2_whiten.yaml --no-download
+
+# 4) Decisive eval (geometry gate → PSNR/LPIPS/alignment/collapse)
+python scripts/evaluate_raw_vs_whitened.py \
+  --config configs/eval_sr.yaml \
+  --vae-sr /kaggle/working/hf_ckpt/vae_sr/latest.pt \
+  --raw-sr /kaggle/working/hf_ckpt/latent_sr_q2/latest.pt \
+  --white-sr /kaggle/working/hf_ckpt/latent_sr_q2_whiten/latest.pt \
+  --whiten /kaggle/working/outputs/whitening/vae_sr_channel_zca_eps1e-4.pt \
+  --output-dir /kaggle/working/outputs/eval_raw_vs_whitened \
+  --num-images 64 --geom-images 2048 --batch-size 4 --seed 42 \
+  --device cuda --no-download
 ```
 
-Ablation ladder: `raw` → `--mode standardize` → `--mode zca` (4×4) → later patch/global.
+Outputs to send back: `whitening_geometry.txt` / `decisive_summary.txt`
+(or the JSON siblings). Those two files answer whether the experiment supports
+the RiT-inspired hypothesis.
+
+Optional broader suite (Phase-8 + Q2 raw + Q2 white) is still available via
+`scripts/evaluate_condition_suite.py`. Do **not** pass a whitener into a
+raw-trained Q2 checkpoint.
 
 **Guidance** (frozen VAE-SR + Q2 concat, late window). Confirmatory dose is four jobs, n=256, about 21 s/image with a decoder backward:
 

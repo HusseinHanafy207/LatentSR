@@ -172,3 +172,50 @@ def test_run_representation_geometry_tiny_vae(tmp_path: Path) -> None:
     )
     assert report["spaces"]["vae1_hr"]["num_samples"] == 6
     assert (tmp_path / "metrics.json").is_file()
+
+
+def test_rit_include_raw_and_whitened_lr(tmp_path: Path) -> None:
+    from latentsr.datasets.onthefly_sr_latent import upsample_bicubic
+    from latentsr.vae.latent import encode_scaled
+    from latentsr.vae.whitening import fit_channel_whitening
+
+    torch.manual_seed(8)
+    vae_a = VAE(base_channels=32, channel_mult=(1, 2, 4), num_res_blocks=1)
+    vae_b = VAE(base_channels=32, channel_mult=(1, 2, 4), num_res_blocks=1)
+    freeze_vae(vae_a)
+    freeze_vae(vae_b)
+    lr = torch.rand(8, 3, 32, 32)
+    hr = torch.rand(8, 3, 128, 128)
+    loader = DataLoader(TensorDataset(lr, hr), batch_size=4)
+    bicubic = upsample_bicubic(lr[:4], 128)
+    z = encode_scaled(vae_b, bicubic, latent_scale=1.0)
+    acc = fit_channel_whitening(num_channels=4, eps=1e-4, mode="zca")
+    acc.update(z)
+    whitener = acc.finalize()
+
+    report = run_representation_geometry(
+        vae_a,
+        vae_b,
+        loader,
+        device=torch.device("cpu"),
+        num_images=8,
+        output_dir=tmp_path,
+        hr_size=128,
+        twonn_bootstraps=2,
+        twonn_subsample=5,
+        seed=0,
+        show_progress=False,
+        whitener_candidate_lr=whitener,
+        include_raw_and_whitened_lr=True,
+    )
+    spaces = set(report["spaces"])
+    assert "vae_sr_lr" in spaces
+    assert "vae_sr_lr_white" in spaces
+    assert report["meta"]["include_raw_and_whitened_lr"] is True
+    # Whitening should change ambient κ / erank on LR.
+    raw_k = report["spaces"]["vae_sr_lr"]["covariance"]["kappa"]
+    white_k = report["spaces"]["vae_sr_lr_white"]["covariance"]["kappa"]
+    assert raw_k != white_k or (
+        report["spaces"]["vae_sr_lr"]["effective_rank"]
+        != report["spaces"]["vae_sr_lr_white"]["effective_rank"]
+    )

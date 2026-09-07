@@ -34,6 +34,7 @@ from latentsr.metrics.representation_geometry import (
 )
 from latentsr.utils.config import get_device, load_config
 from latentsr.vae.latent import is_frozen, load_frozen_vae
+from latentsr.vae.whitening import ChannelWhitening
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,6 +87,26 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--baseline-whiten",
+        type=Path,
+        default=None,
+        help="Optional channel whitener applied to baseline z_lr only.",
+    )
+    parser.add_argument(
+        "--candidate-whiten",
+        type=Path,
+        default=None,
+        help="Optional channel whitener applied to candidate z_lr only.",
+    )
+    parser.add_argument(
+        "--include-raw-and-whitened-lr",
+        action="store_true",
+        help=(
+            "With --candidate-whiten: keep raw candidate_lr and also report "
+            "candidate_lr_white (RiT on both)."
+        ),
+    )
+    parser.add_argument(
         "--download",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -96,6 +117,13 @@ def parse_args() -> argparse.Namespace:
 def _require_file(path: Path, label: str) -> None:
     if not path.is_file():
         raise SystemExit(f"{label} not found:\n  {path}")
+
+
+def _load_whitener(path: Path | None, label: str) -> ChannelWhitening | None:
+    if path is None:
+        return None
+    _require_file(path, label)
+    return ChannelWhitening.load(path)
 
 
 def main() -> None:
@@ -210,6 +238,15 @@ def main() -> None:
     print(f"output_dir={args.output_dir}", flush=True)
     print(f"val size ≈ {val_n}  batches/epoch ≈ {len(val_loader)}", flush=True)
 
+    whitener_a = _load_whitener(args.baseline_whiten, "baseline whitener")
+    whitener_b = _load_whitener(args.candidate_whiten, "candidate whitener")
+    print(
+        f"LR whiten: baseline={whitener_a is not None}  "
+        f"candidate={whitener_b is not None}  "
+        f"raw+white={bool(args.include_raw_and_whitened_lr)}",
+        flush=True,
+    )
+
     report = run_representation_geometry(
         vae_a,
         vae_b,
@@ -225,6 +262,9 @@ def main() -> None:
         twonn_subsample=twonn_subsample,
         seed=seed,
         show_progress=True,
+        whitener_baseline_lr=whitener_a,
+        whitener_candidate_lr=whitener_b,
+        include_raw_and_whitened_lr=bool(args.include_raw_and_whitened_lr),
     )
     print(flush=True)
     print(format_geometry_table(report), flush=True)

@@ -29,6 +29,7 @@ from tqdm.auto import tqdm
 from latentsr.datasets.onthefly_sr_latent import upsample_bicubic
 from latentsr.vae.latent import encode_scaled
 from latentsr.vae.vae import VAE
+from latentsr.vae.whitening import ChannelWhitening
 
 
 def flatten_latents(z: torch.Tensor) -> torch.Tensor:
@@ -357,8 +358,12 @@ def collect_vae_latents(
     latent_scale: float = 1.0,
     show_progress: bool = True,
     desc: str = "encode",
+    whitener_lr: ChannelWhitening | None = None,
 ) -> dict[str, torch.Tensor]:
-    """Encode matched ``(z_hr, z_lr)`` stacks from an SR pair loader."""
+    """Encode matched ``(z_hr, z_lr)`` stacks from an SR pair loader.
+
+    Optional ``whitener_lr`` is applied to ``z_lr`` only (condition geometry).
+    """
     vae.eval()
     z_hr_chunks: list[torch.Tensor] = []
     z_lr_chunks: list[torch.Tensor] = []
@@ -375,6 +380,8 @@ def collect_vae_latents(
         bicubic = upsample_bicubic(lr, hr_size)
         z_hr = encode_scaled(vae, hr, latent_scale=latent_scale)
         z_lr = encode_scaled(vae, bicubic, latent_scale=latent_scale)
+        if whitener_lr is not None:
+            z_lr = whitener_lr.transform(z_lr)
         z_hr_chunks.append(z_hr.cpu())
         z_lr_chunks.append(z_lr.cpu())
         remaining -= take
@@ -400,8 +407,13 @@ def collect_paired_vae_latents(
     hr_size: int = 128,
     latent_scale: float = 1.0,
     show_progress: bool = True,
+    whitener_a_lr: ChannelWhitening | None = None,
+    whitener_b_lr: ChannelWhitening | None = None,
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
-    """Single data pass: encode the same images with both frozen VAEs."""
+    """Single data pass: encode the same images with both frozen VAEs.
+
+    Optional LR whiteners apply to condition latents only (HR stays raw).
+    """
     vae_a.eval()
     vae_b.eval()
     a_hr: list[torch.Tensor] = []
@@ -422,10 +434,16 @@ def collect_paired_vae_latents(
         lr = lr[:take].to(device)
         hr = hr[:take].to(device)
         bicubic = upsample_bicubic(lr, hr_size)
+        z_a_lr = encode_scaled(vae_a, bicubic, latent_scale=latent_scale)
+        z_b_lr = encode_scaled(vae_b, bicubic, latent_scale=latent_scale)
+        if whitener_a_lr is not None:
+            z_a_lr = whitener_a_lr.transform(z_a_lr)
+        if whitener_b_lr is not None:
+            z_b_lr = whitener_b_lr.transform(z_b_lr)
         a_hr.append(encode_scaled(vae_a, hr, latent_scale=latent_scale).cpu())
-        a_lr.append(encode_scaled(vae_a, bicubic, latent_scale=latent_scale).cpu())
+        a_lr.append(z_a_lr.cpu())
         b_hr.append(encode_scaled(vae_b, hr, latent_scale=latent_scale).cpu())
-        b_lr.append(encode_scaled(vae_b, bicubic, latent_scale=latent_scale).cpu())
+        b_lr.append(z_b_lr.cpu())
         remaining -= take
         seen += take
         if pbar is not None:
@@ -450,17 +468,31 @@ def compare_vae_geometries(
     twonn_subsample: int | None = 5000,
     seed: int = 42,
     show_progress: bool = False,
+    extra_spaces: dict[str, torch.Tensor] | None = None,
 ) -> dict[str, Any]:
-    """Geometry for HR and LR latents under two frozen VAEs."""
-    spaces = {
+    """Geometry for HR and LR latents under two frozen VAEs.
+
+    Optional ``extra_spaces`` (e.g. whitened LR) are summarized alongside.
+    """
+    spaces: dict[str, torch.Tensor] = {
         f"{baseline_name}_hr": baseline_latents["z_hr"],
         f"{baseline_name}_lr": baseline_latents["z_lr"],
         f"{candidate_name}_hr": candidate_latents["z_hr"],
         f"{candidate_name}_lr": candidate_latents["z_lr"],
     }
+    if extra_spaces:
+        for name, z in extra_spaces.items():
+            if name in spaces:
+                raise ValueError(f"extra space name collides with default: {name}")
+            spaces[name] = z
     results: dict[str, Any] = {}
     outer = (
-        tqdm(spaces.items(), desc="geometry (4 spaces)", unit="space", leave=True)
+        tqdm(
+            spaces.items(),
+            desc=f"geometry ({len(spaces)} spaces)",
+            unit="space",
+            leave=True,
+        )
         if show_progress
         else spaces.items()
     )
@@ -653,11 +685,23 @@ def run_representation_geometry(
     twonn_subsample: int | None = 5000,
     seed: int = 42,
     show_progress: bool = True,
+    whitener_baseline_lr: ChannelWhitening | None = None,
+    whitener_candidate_lr: ChannelWhitening | None = None,
+    include_raw_and_whitened_lr: bool = False,
 ) -> dict[str, Any]:
-    """Encode both VAEs on the same images and write the geometry report."""
+    """Encode both VAEs on the same images and write the geometry report.
+
+    By default, optional LR whiteners replace the reported ``*_lr`` spaces.
+    Pass ``include_raw_and_whitened_lr=True`` with a candidate whitener to keep
+    raw ``{candidate}_lr`` and add ``{candidate}_lr_white``.
+    """
     output_dir = Path(output_dir)
     _write_status(output_dir, "encoding", num_images=int(num_images))
     _log(f"Encoding {num_images} val images with both VAEs (single pass)…")
+
+    # When comparing raw vs whitened LR, encode raw first then transform once.
+    need_raw_candidate = include_raw_and_whitened_lr and whitener_candidate_lr is not None
+    whitener_b_encode = None if need_raw_candidate else whitener_candidate_lr
     baseline_latents, candidate_latents = collect_paired_vae_latents(
         vae_baseline,
         vae_candidate,
@@ -667,6 +711,8 @@ def run_representation_geometry(
         hr_size=hr_size,
         latent_scale=latent_scale,
         show_progress=show_progress,
+        whitener_a_lr=whitener_baseline_lr,
+        whitener_b_lr=whitener_b_encode,
     )
     if baseline_latents["z_hr"].shape != candidate_latents["z_hr"].shape:
         raise ValueError(
@@ -674,6 +720,13 @@ def run_representation_geometry(
             f"{tuple(baseline_latents['z_hr'].shape)} vs "
             f"{tuple(candidate_latents['z_hr'].shape)}"
         )
+
+    extra_spaces: dict[str, torch.Tensor] | None = None
+    if need_raw_candidate:
+        assert whitener_candidate_lr is not None
+        z_white = whitener_candidate_lr.transform(candidate_latents["z_lr"])
+        extra_spaces = {f"{candidate_name}_lr_white": z_white}
+
     _write_status(
         output_dir,
         "geometry",
@@ -689,6 +742,7 @@ def run_representation_geometry(
         twonn_subsample=twonn_subsample,
         seed=seed,
         show_progress=show_progress,
+        extra_spaces=extra_spaces,
     )
     report["meta"] = {
         "num_images": int(num_images),
@@ -697,6 +751,9 @@ def run_representation_geometry(
         "seed": int(seed),
         "twonn_bootstraps": int(twonn_bootstraps),
         "twonn_subsample": twonn_subsample,
+        "whitener_baseline_lr": whitener_baseline_lr is not None,
+        "whitener_candidate_lr": whitener_candidate_lr is not None,
+        "include_raw_and_whitened_lr": bool(include_raw_and_whitened_lr),
     }
     _log("Writing metrics + plots…")
     write_geometry_report(report, output_dir)

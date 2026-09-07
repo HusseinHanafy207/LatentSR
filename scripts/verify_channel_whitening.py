@@ -1,13 +1,10 @@
 """Verify channel whitening on val LR latents (geometry before vs after).
 
-Compares raw vs whitened z_lr under VAE-1 and/or VAE-SR. Checks that the
-4×4 channel covariance κ drops and erank rises; also reports ambient
-flattened PCA erank / κ for the RiT-style view.
+Checks the RiT-inspired gate before quality eval:
+  κ↓, effective rank↑, PCA less concentrated.
 
   python scripts/verify_channel_whitening.py \\
-    --baseline-vae /kaggle/working/artifacts/vae/checkpoint_epoch_050.pt \\
-    --candidate-vae /kaggle/working/outputs/vae_sr/checkpoints/latest.pt \\
-    --whiten-baseline /kaggle/working/outputs/whitening/vae1_channel_zca_eps1e-4.pt \\
+    --candidate-vae /kaggle/working/hf_ckpt/vae_sr/latest.pt \\
     --whiten-candidate /kaggle/working/outputs/whitening/vae_sr_channel_zca_eps1e-4.pt \\
     --config configs/eval_vae.yaml --num-images 2048 --no-download
 """
@@ -23,16 +20,14 @@ import torch
 from tqdm.auto import tqdm
 
 from latentsr.datasets.sr_pairs import get_sr_pair_val_dataloader
-from latentsr.metrics.representation_geometry import (
-    covariance_condition_number,
-    effective_rank,
-    flatten_latents,
-    pca_eigenvalues,
+from latentsr.metrics.whitening_geometry import (
+    compare_raw_vs_whitened_z_lr,
+    format_whitening_geometry_block,
 )
 from latentsr.super_resolution.inference import encode_lr_latents
 from latentsr.utils.config import get_device, load_config
 from latentsr.vae.latent import load_frozen_vae
-from latentsr.vae.whitening import ChannelWhitening, channel_covariance_stats
+from latentsr.vae.whitening import ChannelWhitening
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,19 +54,6 @@ def parse_args() -> argparse.Namespace:
         default=False,
     )
     return parser.parse_args()
-
-
-def _ambient_stats(z: torch.Tensor) -> dict[str, float]:
-    flat = flatten_latents(z)
-    eigs = pca_eigenvalues(flat)
-    kappa = covariance_condition_number(eigs, num_samples=flat.shape[0])
-    return {
-        "ambient_erank": effective_rank(eigs),
-        "ambient_kappa": kappa["kappa"],
-        "ambient_var_top1": float((eigs[0] / eigs.sum().clamp_min(1e-30)).item()),
-        "num_images": float(flat.shape[0]),
-        "ambient_dim": float(flat.shape[1]),
-    }
 
 
 @torch.no_grad()
@@ -107,65 +89,18 @@ def _collect_z_lr(
     return torch.cat(chunks, dim=0)
 
 
-def _pack(name: str, z_raw: torch.Tensor, whitener: ChannelWhitening | None) -> dict[str, Any]:
-    raw_ch = channel_covariance_stats(z_raw)
-    raw_amb = _ambient_stats(z_raw)
-    out: dict[str, Any] = {
-        "name": name,
-        "raw_channel": raw_ch,
-        "raw_ambient": raw_amb,
-    }
-    if whitener is None:
-        out["warning"] = "no whitener provided"
-        return out
-    z_w = whitener.transform(z_raw)
-    white_ch = channel_covariance_stats(z_w)
-    white_amb = _ambient_stats(z_w)
-    out["whitened_channel"] = white_ch
-    out["whitened_ambient"] = white_amb
-    out["delta"] = {
-        "channel_kappa": white_ch["kappa"] - raw_ch["kappa"],
-        "channel_erank": white_ch["effective_rank"] - raw_ch["effective_rank"],
-        "ambient_kappa": white_amb["ambient_kappa"] - raw_amb["ambient_kappa"],
-        "ambient_erank": white_amb["ambient_erank"] - raw_amb["ambient_erank"],
-    }
-    out["ok_channel_kappa_dropped"] = bool(white_ch["kappa"] < raw_ch["kappa"])
-    out["ok_channel_erank_rose"] = bool(
-        white_ch["effective_rank"] > raw_ch["effective_rank"] - 1e-6
-    )
-    return out
-
-
-def _fmt_block(block: dict[str, Any]) -> str:
-    lines = [f"[{block['name']}]"]
-    raw_ch = block["raw_channel"]
-    lines.append(
-        f"  raw  channel κ={raw_ch['kappa']:.3g}  erank={raw_ch['effective_rank']:.3f}  "
-        f"top1%={100*raw_ch['var_top1']:.1f}"
-    )
-    raw_a = block["raw_ambient"]
-    lines.append(
-        f"  raw  ambient κ={raw_a['ambient_kappa']:.3g}  erank={raw_a['ambient_erank']:.1f}"
-    )
-    if "whitened_channel" not in block:
-        lines.append(f"  WARNING: {block.get('warning', 'missing whitener')}")
-        return "\n".join(lines)
-    w_ch = block["whitened_channel"]
-    w_a = block["whitened_ambient"]
-    lines.append(
-        f"  white channel κ={w_ch['kappa']:.3g}  erank={w_ch['effective_rank']:.3f}  "
-        f"top1%={100*w_ch['var_top1']:.1f}"
-    )
-    lines.append(
-        f"  white ambient κ={w_a['ambient_kappa']:.3g}  erank={w_a['ambient_erank']:.1f}"
-    )
-    lines.append(
-        f"  checks: κ↓={block['ok_channel_kappa_dropped']}  "
-        f"erank↑={block['ok_channel_erank_rose']}"
-    )
-    if not block["ok_channel_kappa_dropped"]:
-        lines.append("  FAIL: channel κ did not decrease — debug whitening before training.")
-    return "\n".join(lines)
+def _json_safe(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float):
+        if obj != obj:
+            return "nan"
+        if obj in (float("inf"), float("-inf")):
+            return str(obj)
+        return obj
+    return obj
 
 
 def main() -> None:
@@ -210,13 +145,18 @@ def main() -> None:
         "spaces": {},
     }
     print_blocks: list[str] = []
+    any_fail = False
     for name, vae_path, whiten_path in pairs:
         if not vae_path.is_file():
             raise SystemExit(f"{name} VAE not found: {vae_path}")
         vae, _ = load_frozen_vae(vae_path, map_location=device)
-        whitener = ChannelWhitening.load(whiten_path) if whiten_path else None
-        if whiten_path and whitener is None:
-            raise SystemExit(f"Failed to load whitener: {whiten_path}")
+        if whiten_path is None:
+            raise SystemExit(
+                f"{name}: pass --whiten-* so raw vs whitened geometry can be checked."
+            )
+        if not whiten_path.is_file():
+            raise SystemExit(f"whitener not found: {whiten_path}")
+        whitener = ChannelWhitening.load(whiten_path)
         print(f"\n=== {name} ===", flush=True)
         z = _collect_z_lr(
             vae,
@@ -226,19 +166,26 @@ def main() -> None:
             hr_size=hr_size,
             latent_scale=float(args.latent_scale),
         )
-        block = _pack(name, z, whitener)
+        block = compare_raw_vs_whitened_z_lr(z, whitener, name=name)
         report["spaces"][name] = block
-        print_blocks.append(_fmt_block(block))
+        print_blocks.append(format_whitening_geometry_block(block))
+        if not block["geometry_ok"]:
+            any_fail = True
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "whitening_verify.json").write_text(
-        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+        json.dumps(_json_safe(report), indent=2) + "\n", encoding="utf-8"
     )
     table = "\n\n".join(print_blocks) + "\n"
     (out_dir / "whitening_verify.txt").write_text(table, encoding="utf-8")
     print("\n" + table, flush=True)
     print(f"Wrote {out_dir}", flush=True)
+    if any_fail:
+        raise SystemExit(
+            "Geometry gate failed for at least one VAE — "
+            "do not proceed to raw-vs-whitened quality eval yet."
+        )
 
 
 if __name__ == "__main__":

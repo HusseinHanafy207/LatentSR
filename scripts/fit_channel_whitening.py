@@ -1,8 +1,5 @@
 """Fit channel-wise ZCA whitening on **training** LR latents only.
 
-Treat each spatial site as a 4-D sample. Estimate μ, Σ on CelebA train,
-freeze W=(Σ+εI)^{-1/2}, never refit on val/test.
-
   python scripts/fit_channel_whitening.py \\
     --vae-checkpoint /kaggle/working/outputs/vae_sr/checkpoints/latest.pt \\
     --config configs/latent_sr_q2.yaml \\
@@ -127,6 +124,7 @@ def main() -> None:
 
     remaining = max(int(args.max_images), 1)
     seen = 0
+    last_z: torch.Tensor | None = None
     pbar = tqdm(total=remaining, desc="fit train z_lr", unit="img")
     for lr, _hr in train_loader:
         if remaining <= 0:
@@ -137,6 +135,7 @@ def main() -> None:
             vae, lr, hr_size=hr_size, latent_scale=latent_scale, apply_whiten=False
         )
         acc.update(z.cpu())
+        last_z = z.detach().cpu()
         remaining -= take
         seen += take
         pbar.update(take)
@@ -148,16 +147,10 @@ def main() -> None:
         "n_channel_vectors": whitener.meta.get("n_channel_vectors"),
         "cov_condition_raw": whitener.meta.get("cov_condition_raw"),
     }
-    # Quick check: transform a small held-out train batch already in memory.
-    z_check = encode_lr_latents(
-        vae,
-        lr,
-        hr_size=hr_size,
-        latent_scale=latent_scale,
-        apply_whiten=False,
-    )
-    before = channel_covariance_stats(z_check.cpu())
-    after = channel_covariance_stats(whitener.transform(z_check).cpu())
+    if last_z is None:
+        raise SystemExit("No train latents accumulated; check --max-images / data.")
+    before = channel_covariance_stats(last_z)
+    after = channel_covariance_stats(whitener.transform(last_z))
 
     print(f"\nWrote {out}", flush=True)
     print(f"fit vectors: {raw_stats['n_channel_vectors']}", flush=True)

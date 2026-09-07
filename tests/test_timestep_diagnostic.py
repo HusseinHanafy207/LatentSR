@@ -86,6 +86,78 @@ def test_identical_models_zero_z0_gap(tmp_path: Path) -> None:
     for row in result["rows"]:
         assert row["z_lr_rmse_mean"] == pytest.approx(0.0, abs=1e-5)
         assert row["z0_rmse_sr_vs_vae1_mean"] == pytest.approx(0.0, abs=1e-5)
+    align = result["alignment"]
+    assert "vae1" in align and "vae_sr" in align
+    for block in align.values():
+        assert "t_peak" in block and "cos_peak" in block
+        assert "cos_t0" in block and "collapse" in block
+        assert block["collapse"] == pytest.approx(
+            block["cos_peak"] - block["cos_t0"], abs=1e-6
+        )
+
+
+def test_whitener_changes_cosine_not_raw_gap(tmp_path: Path) -> None:
+    """Whitening moves cosine reference; raw Δz_lr stays identical."""
+    from latentsr.vae.whitening import fit_channel_whitening
+
+    torch.manual_seed(2)
+    model = build_conditioned_latent_ddpm_from_config(_tiny_concat_config())
+    clone = build_conditioned_latent_ddpm_from_config(_tiny_concat_config())
+    clone.load_state_dict(model.state_dict())
+    vae = VAE(base_channels=32, num_res_blocks=1)
+    freeze_vae(vae)
+
+    lr = torch.rand(4, 3, 32, 32)
+    hr = torch.rand(4, 3, 128, 128)
+    loader = DataLoader(TensorDataset(lr, hr), batch_size=2)
+
+    # Fit a non-identity whitener on random (B,C,H,W) latents.
+    from latentsr.super_resolution.inference import encode_lr_latents
+
+    z = encode_lr_latents(
+        vae, lr[:2], hr_size=128, latent_scale=1.0, apply_whiten=False
+    )
+    acc = fit_channel_whitening(num_channels=4, eps=1e-4, mode="zca")
+    acc.update(z)
+    whitener = acc.finalize()
+
+    raw = run_timestep_diagnostic(
+        model,
+        vae,
+        clone,
+        vae,
+        loader,
+        device=torch.device("cpu"),
+        num_images=4,
+        hr_size=128,
+        noise_seed=7,
+        show_progress=False,
+    )
+    white = run_timestep_diagnostic(
+        model,
+        vae,
+        clone,
+        vae,
+        loader,
+        device=torch.device("cpu"),
+        num_images=4,
+        hr_size=128,
+        noise_seed=7,
+        whitener_a=None,
+        whitener_b=whitener,
+        show_progress=False,
+        candidate_name="vae_sr_white",
+    )
+    # Raw encode gap is identical (both arms share the same VAE encode).
+    for r0, r1 in zip(raw["rows"], white["rows"], strict=True):
+        assert r0["z_lr_rmse_mean"] == pytest.approx(r1["z_lr_rmse_mean"], abs=1e-6)
+    # Candidate cosine should move once condition is whitened.
+    raw_c0 = raw["alignment"]["vae_sr"]["cos_t0"]
+    white_c0 = white["alignment"]["vae_sr_white"]["cos_t0"]
+    assert abs(raw_c0 - white_c0) > 1e-4 or abs(
+        raw["alignment"]["vae_sr"]["cos_peak"]
+        - white["alignment"]["vae_sr_white"]["cos_peak"]
+    ) > 1e-4
 
 
 def test_different_z_lr_is_constant_in_t() -> None:

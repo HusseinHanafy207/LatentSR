@@ -1,10 +1,10 @@
 """Timestep diagnostic: VAE-1 vs VAE-SR concat LatentSR (no training).
 
 Paired reverse sampling (same val images, seed 42, per-image x_T + step noise).
-Logs ||z_lr^SR − z_lr^VAE1||, cos(ẑ0, z_lr), ||ẑ0 − z_lr||, ||ẑ0^SR − ẑ0^VAE1||
-at every diffusion t.
+Logs ||z_lr^SR − z_lr^VAE1|| (raw), cos(ẑ0, z_lr_cond), ||ẑ0 − z_lr_cond||,
+||ẑ0^SR − ẑ0^VAE1|| at every diffusion t, plus peak / t=0 cosine / collapse.
 
-Kaggle:
+Kaggle (raw Q2 vs Phase-8):
 
   python scripts/diagnose_timesteps.py \\
     --config configs/eval_sr.yaml \\
@@ -13,6 +13,19 @@ Kaggle:
     --candidate-sr /kaggle/working/hf_ckpt/latent_sr_q2/latest.pt \\
     --candidate-vae /kaggle/working/hf_ckpt/vae_sr/latest.pt \\
     --output-dir /kaggle/working/outputs/eval_timestep_diagnostic \\
+    --num-images 64 --batch-size 4 --seed 42 --device cuda --no-download
+
+Kaggle (matched whitened Q2; cosine vs whitened condition):
+
+  python scripts/diagnose_timesteps.py \\
+    --config configs/eval_sr.yaml \\
+    --baseline-sr /kaggle/working/hf_ckpt/latest.pt \\
+    --baseline-vae /kaggle/working/hf_ckpt/vae/checkpoint_epoch_050.pt \\
+    --candidate-sr /kaggle/working/hf_ckpt/latent_sr_q2_whiten/latest.pt \\
+    --candidate-vae /kaggle/working/hf_ckpt/vae_sr/latest.pt \\
+    --candidate-whiten /kaggle/working/outputs/whitening/vae_sr_channel_zca_eps1e-4.pt \\
+    --candidate-name vae_sr_white \\
+    --output-dir /kaggle/working/outputs/eval_timestep_q2_white \\
     --num-images 64 --batch-size 4 --seed 42 --device cuda --no-download
 """
 
@@ -30,6 +43,7 @@ from latentsr.metrics.timestep_diagnostic import (
 )
 from latentsr.super_resolution.inference import load_sr_components
 from latentsr.utils.config import get_device, load_config
+from latentsr.vae.whitening import ChannelWhitening
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,6 +56,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-vae", type=Path, required=True)
     parser.add_argument("--baseline-name", type=str, default="vae1")
     parser.add_argument("--candidate-name", type=str, default="vae_sr")
+    parser.add_argument(
+        "--baseline-whiten",
+        type=Path,
+        default=None,
+        help="Channel whitener for baseline condition (matched whitened DDPM).",
+    )
+    parser.add_argument(
+        "--candidate-whiten",
+        type=Path,
+        default=None,
+        help="Channel whitener for candidate condition (matched whitened DDPM).",
+    )
     parser.add_argument("--config", type=Path, default=Path("configs/eval_sr.yaml"))
     parser.add_argument("--num-images", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -60,6 +86,13 @@ def parse_args() -> argparse.Namespace:
 def _require_file(path: Path, label: str) -> None:
     if not path.is_file():
         raise SystemExit(f"{label} not found:\n  {path}")
+
+
+def _load_whitener(path: Path | None, label: str) -> ChannelWhitening | None:
+    if path is None:
+        return None
+    _require_file(path, label)
+    return ChannelWhitening.load(path)
 
 
 def main() -> None:
@@ -81,16 +114,27 @@ def main() -> None:
         args.baseline_sr,
         vae_checkpoint=args.baseline_vae,
         map_location=device,
+        whiten_path=args.baseline_whiten,
     )
     model_b, vae_b, meta_b = load_sr_components(
         args.candidate_sr,
         vae_checkpoint=args.candidate_vae,
         map_location=device,
+        whiten_path=args.candidate_whiten,
     )
+    # Prefer explicit CLI whitener; fall back to checkpoint-embedded path.
+    whitener_a = _load_whitener(args.baseline_whiten, "baseline whitener")
+    if whitener_a is None:
+        whitener_a = meta_a.get("whitener")
+    whitener_b = _load_whitener(args.candidate_whiten, "candidate whitener")
+    if whitener_b is None:
+        whitener_b = meta_b.get("whitener")
+
     cond_a = getattr(model_a.unet, "condition_type", "concat")
     cond_b = getattr(model_b.unet, "condition_type", "concat")
     print(f"baseline ({args.baseline_name}): epoch={meta_a.get('sr_epoch')} condition={cond_a}")
     print(f"candidate ({args.candidate_name}): epoch={meta_b.get('sr_epoch')} condition={cond_b}")
+    print(f"whiten baseline={whitener_a is not None}  candidate={whitener_b is not None}")
 
     hr_size = int(meta_a.get("hr_size", config.get("hr_size", 128)))
     lr_size = int(meta_a.get("lr_size", config.get("lr_size", 32)))
@@ -145,6 +189,8 @@ def main() -> None:
         hr_size=hr_size,
         latent_scale_a=float(meta_a["latent_scale"]),
         latent_scale_b=float(meta_b["latent_scale"]),
+        whitener_a=whitener_a,
+        whitener_b=whitener_b,
         noise_seed=seed,
         output_dir=output_dir,
         show_progress=True,

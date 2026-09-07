@@ -29,6 +29,7 @@ from latentsr.super_resolution.sample import (
     seeded_noise_like,
 )
 from latentsr.vae.vae import VAE
+from latentsr.vae.whitening import ChannelWhitening
 
 _VAE1_COLOR = "#4c78a8"
 _VAESR_COLOR = "#f58518"
@@ -99,6 +100,8 @@ def run_timestep_diagnostic(
     hr_size: int = 128,
     latent_scale_a: float = 1.0,
     latent_scale_b: float = 1.0,
+    whitener_a: ChannelWhitening | None = None,
+    whitener_b: ChannelWhitening | None = None,
     noise_seed: int = 42,
     start_index: int = 0,
     output_dir: str | Path | None = None,
@@ -108,8 +111,11 @@ def run_timestep_diagnostic(
 ) -> dict[str, Any]:
     """Paired reverse chain; accumulate ẑ0 metrics vs t.
 
-    ``model_a`` / ``vae_a`` are VAE-1 concat LatentSR.
-    ``model_b`` / ``vae_b`` are VAE-SR concat LatentSR.
+    ``model_a`` / ``vae_a`` are baseline concat LatentSR.
+    ``model_b`` / ``vae_b`` are candidate concat LatentSR.
+
+    Optional channel whiteners apply to **conditions only**. Cosine is vs the
+    condition each model actually sees. ``z_lr_rmse`` stays in raw encode space.
     """
     if model_a.num_timesteps != model_b.num_timesteps:
         raise ValueError(
@@ -147,15 +153,30 @@ def run_timestep_diagnostic(
         lr = lr[:take].to(device)
         indices = list(range(next_index, next_index + take))
 
-        z_lr_a = encode_lr_latents(
-            vae_a, lr, hr_size=hr_size, latent_scale=latent_scale_a
+        z_lr_a_raw = encode_lr_latents(
+            vae_a,
+            lr,
+            hr_size=hr_size,
+            latent_scale=latent_scale_a,
+            apply_whiten=False,
         )
-        z_lr_b = encode_lr_latents(
-            vae_b, lr, hr_size=hr_size, latent_scale=latent_scale_b
+        z_lr_b_raw = encode_lr_latents(
+            vae_b,
+            lr,
+            hr_size=hr_size,
+            latent_scale=latent_scale_b,
+            apply_whiten=False,
         )
-        z_lr_gap = latent_rmse(z_lr_b, z_lr_a)
+        z_lr_a = (
+            whitener_a.transform(z_lr_a_raw) if whitener_a is not None else z_lr_a_raw
+        )
+        z_lr_b = (
+            whitener_b.transform(z_lr_b_raw) if whitener_b is not None else z_lr_b_raw
+        )
+        z_lr_gap = latent_rmse(z_lr_b_raw, z_lr_a_raw)
 
-        x_a = seeded_noise_like(z_lr_a, indices, base_seed=noise_seed, salt=0)
+        # Shared x_T shape from raw (whitening preserves layout).
+        x_a = seeded_noise_like(z_lr_a_raw, indices, base_seed=noise_seed, salt=0)
         x_b = x_a.clone()
 
         inner = range(num_t - 1, -1, -1)
@@ -205,12 +226,41 @@ def run_timestep_diagnostic(
         "start_index": int(start_index),
         "baseline_name": baseline_name,
         "candidate_name": candidate_name,
+        "whitener_a": whitener_a is not None,
+        "whitener_b": whitener_b is not None,
         "rows": rows,
         "highlights": _highlights(rows),
+        "alignment": _alignment_summary(rows, baseline_name, candidate_name),
     }
     if output_dir is not None:
         result["paths"] = write_timestep_outputs(result, output_dir)
     return result
+
+
+def _alignment_summary(
+    rows: list[dict[str, float | int]],
+    baseline_name: str,
+    candidate_name: str,
+) -> dict[str, Any]:
+    """Peak cosine, t=0 cosine, and mean-curve collapse for both models."""
+    if not rows:
+        return {}
+    t0 = next(r for r in rows if int(r["t"]) == 0)
+    out: dict[str, Any] = {}
+    for tag, key in (
+        (baseline_name, "cosine_z0_z_lr_vae1_mean"),
+        (candidate_name, "cosine_z0_z_lr_vaesr_mean"),
+    ):
+        peak_row = max(rows, key=lambda r: float(r[key]))
+        cos_peak = float(peak_row[key])
+        cos_t0 = float(t0[key])
+        out[tag] = {
+            "t_peak": int(peak_row["t"]),
+            "cos_peak": cos_peak,
+            "cos_t0": cos_t0,
+            "collapse": cos_peak - cos_t0,
+        }
+    return out
 
 
 def _rows_from_curves(
@@ -280,10 +330,12 @@ def format_timestep_table(result: dict[str, Any]) -> str:
     highlights = result.get("highlights") or {}
     lines = [
         f"n={n}  t=0 (clean) … t={t_max} (noise)",
-        f"Δz_lr = ||z_lr[{result['candidate_name']}] − z_lr[{result['baseline_name']}]||  (RMSE)",
+        f"Δz_lr = ||z_lr_raw[{result['candidate_name']}] − z_lr_raw[{result['baseline_name']}]||  (RMSE)",
+        f"whiten: {result.get('baseline_name')}={result.get('whitener_a', False)}  "
+        f"{result.get('candidate_name')}={result.get('whitener_b', False)}",
         "",
         f"{'t':>5}  {'Δz_lr':>8}  {'cos ẑ0,z_lr':^21}  {'||ẑ0−z_lr||':^21}  {'||ẑ0SR−ẑ0VAE1||':>16}",
-        f"{'':>5}  {'':>8}  {'VAE-1':>10} {'VAE-SR':>10}  {'VAE-1':>10} {'VAE-SR':>10}",
+        f"{'':>5}  {'':>8}  {'base':>10} {'cand':>10}  {'base':>10} {'cand':>10}",
         "-" * 88,
     ]
     for t in sorted(highlights):
@@ -294,6 +346,18 @@ def format_timestep_table(result: dict[str, Any]) -> str:
             f"{h['z0_z_lr_rmse_vae1_mean']:10.4f} {h['z0_z_lr_rmse_vaesr_mean']:10.4f}  "
             f"{h['z0_rmse_sr_vs_vae1_mean']:16.4f}"
         )
+    align = result.get("alignment") or {}
+    if align:
+        lines.append("")
+        lines.append("Condition alignment (mean curve):")
+        lines.append(
+            f"  {'model':<14} {'t_peak':>7} {'cos_peak':>9} {'cos_t0':>9} {'collapse':>9}"
+        )
+        for name, block in align.items():
+            lines.append(
+                f"  {name:<14} {block['t_peak']:7d} {block['cos_peak']:9.4f} "
+                f"{block['cos_t0']:9.4f} {block['collapse']:9.4f}"
+            )
     return "\n".join(lines)
 
 
