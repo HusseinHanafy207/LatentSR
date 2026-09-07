@@ -68,7 +68,13 @@ def _collect_z_lr(
 ) -> torch.Tensor:
     chunks: list[torch.Tensor] = []
     remaining = max(int(num_images), 1)
-    pbar = tqdm(total=remaining, desc="encode val z_lr", unit="img", leave=False)
+    pbar = tqdm(
+        total=remaining,
+        desc="encode val z_lr",
+        unit="img",
+        leave=True,
+        dynamic_ncols=True,
+    )
     for lr, _hr in loader:
         if remaining <= 0:
             break

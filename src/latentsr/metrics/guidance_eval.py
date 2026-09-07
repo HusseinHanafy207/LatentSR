@@ -283,7 +283,11 @@ def measure_lambda_ratios(
     batches = list(
         iter_indexed_batches(loader, start_index=start_index, num_images=num_images)
     )
-    iterator = tqdm(batches, desc="lambda-sanity", leave=False) if show_progress else batches
+    iterator = (
+        tqdm(batches, desc="lambda-sanity", unit="batch", leave=True, dynamic_ncols=True)
+        if show_progress
+        else batches
+    )
     for lr, hr, indices in iterator:
         del hr
         lr = lr.to(device)
@@ -456,7 +460,9 @@ def run_guidance_condition(
         tqdm(
             total=num_images,
             desc=f"guidance-{condition}",
-            leave=False,
+            unit="img",
+            leave=True,
+            dynamic_ncols=True,
             initial=len(done),
         )
         if show_progress
@@ -521,7 +527,7 @@ def run_guidance_condition(
             noise_seed=noise_seed,
             log_timesteps=tuple(log_set),
             on_log=_on_log,
-            show_progress=False,
+            show_progress=show_progress,
         )
         pred = decode_scaled(vae, z_sr, latent_scale).clamp(0.0, 1.0)
         methods = {"bicubic": bicubic, "soft_decode": d_zlr, "latentsr": pred}

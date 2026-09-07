@@ -423,7 +423,13 @@ def collect_paired_vae_latents(
     remaining = max(int(num_images), 1)
     seen = 0
     pbar = (
-        tqdm(total=num_images, desc="encode (both VAEs)", unit="img", leave=True)
+        tqdm(
+            total=num_images,
+            desc="encode (both VAEs)",
+            unit="img",
+            leave=True,
+            dynamic_ncols=True,
+        )
         if show_progress
         else None
     )

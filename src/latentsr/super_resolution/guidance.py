@@ -201,7 +201,14 @@ def sample_guided_latents(
     log_set = {int(t) for t in (log_timesteps or ())}
     timesteps = range(model.num_timesteps - 1, -1, -1)
     iterator: Any = (
-        tqdm(timesteps, desc="guided-sampling", leave=False)
+        tqdm(
+            timesteps,
+            desc="guided-sampling",
+            unit="t",
+            leave=False,
+            dynamic_ncols=True,
+            mininterval=0.5,
+        )
         if show_progress
         else timesteps
     )

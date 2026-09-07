@@ -7,18 +7,6 @@ Order (research gate → quality):
   2) Same images + same reverse-process noise:
        PSNR, LPIPS, reverse-chain alignment,
        peak cosine, t=0 cosine, collapse score
-
-Kaggle:
-
-  python scripts/evaluate_raw_vs_whitened.py \\
-    --config configs/eval_sr.yaml \\
-    --vae-sr /kaggle/working/hf_ckpt/vae_sr/latest.pt \\
-    --raw-sr /kaggle/working/hf_ckpt/latent_sr_q2/latest.pt \\
-    --white-sr /kaggle/working/hf_ckpt/latent_sr_q2_whiten/latest.pt \\
-    --whiten /kaggle/working/outputs/whitening/vae_sr_channel_zca_eps1e-4.pt \\
-    --output-dir /kaggle/working/outputs/eval_raw_vs_whitened \\
-    --num-images 64 --geom-images 2048 --batch-size 4 --seed 42 \\
-    --device cuda --no-download
 """
 
 from __future__ import annotations
@@ -137,7 +125,13 @@ def _collect_z_lr(
 ) -> torch.Tensor:
     chunks: list[torch.Tensor] = []
     remaining = max(int(num_images), 1)
-    pbar = tqdm(total=remaining, desc="encode val z_lr", unit="img", leave=False)
+    pbar = tqdm(
+        total=remaining,
+        desc="encode val z_lr",
+        unit="img",
+        leave=True,
+        dynamic_ncols=True,
+    )
     for lr, _hr in loader:
         if remaining <= 0:
             break
@@ -304,6 +298,7 @@ def main() -> None:
         hr_size=hr_size,
         latent_scale=float(config.get("latent_scale", 1.0)),
     )
+    print("Computing channel + ambient PCA geometry…", flush=True)
     geometry = compare_raw_vs_whitened_z_lr(z_lr, whitener, name="vae_sr")
     geom_txt = format_whitening_geometry_block(geometry)
     print(geom_txt, flush=True)
@@ -389,6 +384,7 @@ def main() -> None:
     # 3) PSNR / LPIPS + collapse on same seed (per-arm reverse + decode)
     # ------------------------------------------------------------------
     print("\n=== 3/3 PSNR/LPIPS + collapse (shared noise seed) ===", flush=True)
+    print("[q2_raw] reverse + decode…", flush=True)
     packed_raw = reverse_cosine_curves(
         model_raw,
         vae_raw,
@@ -403,6 +399,7 @@ def main() -> None:
         compute_lpips=bool(args.lpips),
         whitener=None,
     )
+    print("[q2_white] reverse + decode…", flush=True)
     packed_white = reverse_cosine_curves(
         model_white,
         vae_white,

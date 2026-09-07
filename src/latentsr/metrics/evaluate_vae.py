@@ -164,15 +164,27 @@ def evaluate_vae(
     next_index = 0
     grid_lr = grid_bicubic = grid_soft = grid_vae_hr = grid_hr = None
 
-    iterator = tqdm(loader, desc="evaluate-vae", leave=False) if show_progress else loader
+    pbar = (
+        tqdm(
+            total=remaining,
+            desc="evaluate-vae",
+            unit="img",
+            leave=True,
+            dynamic_ncols=True,
+        )
+        if show_progress
+        else None
+    )
     dataset = loader.dataset
-    for lr, hr in iterator:
+    for lr, hr in loader:
         if remaining <= 0:
             break
         take = min(lr.shape[0], remaining)
         lr = lr[:take].to(device)
         hr = hr[:take].to(device)
         indices = list(range(next_index, next_index + take))
+        if pbar is not None:
+            pbar.set_postfix(idx=f"{indices[0]}-{indices[-1]}", refresh=False)
 
         bicubic = upsample_bicubic(lr, hr_size)
         z_hr = encode_scaled(vae, hr, latent_scale=latent_scale)
@@ -224,6 +236,11 @@ def evaluate_vae(
 
         remaining -= take
         next_index += take
+        if pbar is not None:
+            pbar.update(take)
+
+    if pbar is not None:
+        pbar.close()
 
     summary: dict[str, dict[str, dict[str, float]]] = {}
     for method, metric_map in scores.items():

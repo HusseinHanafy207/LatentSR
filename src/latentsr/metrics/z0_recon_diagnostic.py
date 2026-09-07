@@ -113,7 +113,15 @@ def run_z0_recon_diagnostic(
     remaining = max(int(num_images), 1)
     next_index = int(start_index)
     pbar = (
-        tqdm(total=remaining, desc="z0-recon", leave=False) if show_progress else None
+        tqdm(
+            total=remaining,
+            desc="z0-recon",
+            unit="img",
+            leave=True,
+            dynamic_ncols=True,
+        )
+        if show_progress
+        else None
     )
 
     for lr, hr in loader:
@@ -123,6 +131,8 @@ def run_z0_recon_diagnostic(
         lr = lr[:take].to(device)
         hr = hr[:take].to(device)
         indices = list(range(next_index, next_index + take))
+        if pbar is not None:
+            pbar.set_postfix(idx=f"{indices[0]}-{indices[-1]}", refresh=False)
 
         z_lr_a = encode_lr_latents(
             vae_a, lr, hr_size=hr_size, latent_scale=latent_scale_a
@@ -133,7 +143,17 @@ def run_z0_recon_diagnostic(
         x_a = seeded_noise_like(z_lr_a, indices, base_seed=noise_seed, salt=0)
         x_b = x_a.clone()
 
-        for t in range(num_t - 1, -1, -1):
+        steps = range(num_t - 1, -1, -1)
+        if show_progress:
+            steps = tqdm(
+                steps,
+                desc="z0-recon reverse",
+                unit="t",
+                leave=False,
+                dynamic_ncols=True,
+                mininterval=0.5,
+            )
+        for t in steps:
             t_batch = torch.full((take,), t, device=device, dtype=torch.long)
             eps_a = model_a.predict_noise(x_a, t_batch, z_lr_a)
             eps_b = model_b.predict_noise(x_b, t_batch, z_lr_b)

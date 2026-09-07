@@ -196,7 +196,13 @@ def collect_z_lr_bank(
     remaining = max(int(num_images), 1)
     next_index = int(start_index)
     pbar = (
-        tqdm(total=remaining, desc="encode z_lr bank", unit="img", leave=False)
+        tqdm(
+            total=remaining,
+            desc="encode z_lr bank",
+            unit="img",
+            leave=True,
+            dynamic_ncols=True,
+        )
         if show_progress
         else None
     )
@@ -268,7 +274,13 @@ def reverse_cosine_curves(
     remaining = max(int(num_images), 1)
     next_index = int(start_index)
     pbar = (
-        tqdm(total=remaining, desc="reverse cos curves", unit="img", leave=True)
+        tqdm(
+            total=remaining,
+            desc="reverse cos curves",
+            unit="img",
+            leave=True,
+            dynamic_ncols=True,
+        )
         if show_progress
         else None
     )
@@ -280,6 +292,8 @@ def reverse_cosine_curves(
         lr = lr[:take].to(device)
         hr_b = hr[:take].to(device)
         batch_idx = list(range(next_index, next_index + take))
+        if pbar is not None:
+            pbar.set_postfix(idx=f"{batch_idx[0]}-{batch_idx[-1]}", refresh=False)
         z_lr_raw = encode_lr_latents(
             vae,
             lr,
@@ -291,7 +305,17 @@ def reverse_cosine_curves(
         x = seeded_noise_like(z_lr_raw, batch_idx, base_seed=noise_seed, salt=0)
         cos_hist = torch.empty(take, num_t, dtype=torch.float32)
 
-        for t in range(num_t - 1, -1, -1):
+        steps = range(num_t - 1, -1, -1)
+        if show_progress:
+            steps = tqdm(
+                steps,
+                desc="reverse t",
+                unit="t",
+                leave=False,
+                dynamic_ncols=True,
+                mininterval=0.5,
+            )
+        for t in steps:
             t_batch = torch.full((take,), t, device=device, dtype=torch.long)
             eps = model.predict_noise(x, t_batch, z_lr)
             z0 = predict_x0_from_eps(model.scheduler, x, t_batch, eps)

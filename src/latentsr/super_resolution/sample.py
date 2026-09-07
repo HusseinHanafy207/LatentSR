@@ -113,7 +113,16 @@ def sample_conditional_latents(
         z = noise.to(device=device, dtype=z_lr.dtype)
     timesteps = range(model.num_timesteps - 1, -1, -1)
     iterator = (
-        tqdm(timesteps, desc="sr-sampling", leave=False) if show_progress else timesteps
+        tqdm(
+            timesteps,
+            desc="sr-sampling",
+            unit="t",
+            leave=False,
+            dynamic_ncols=True,
+            mininterval=0.5,
+        )
+        if show_progress
+        else timesteps
     )
     for t in iterator:
         t_batch = torch.full((z.shape[0],), t, device=device, dtype=torch.long)

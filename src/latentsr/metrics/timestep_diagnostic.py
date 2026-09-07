@@ -141,7 +141,13 @@ def run_timestep_diagnostic(
     remaining = max(int(num_images), 1)
     next_index = int(start_index)
     pbar = (
-        tqdm(total=remaining, desc="timestep-diag", leave=False)
+        tqdm(
+            total=remaining,
+            desc="timestep-diag",
+            unit="img",
+            leave=True,
+            dynamic_ncols=True,
+        )
         if show_progress
         else None
     )
@@ -152,6 +158,8 @@ def run_timestep_diagnostic(
         take = min(lr.shape[0], remaining)
         lr = lr[:take].to(device)
         indices = list(range(next_index, next_index + take))
+        if pbar is not None:
+            pbar.set_postfix(idx=f"{indices[0]}-{indices[-1]}", refresh=False)
 
         z_lr_a_raw = encode_lr_latents(
             vae_a,
@@ -180,6 +188,15 @@ def run_timestep_diagnostic(
         x_b = x_a.clone()
 
         inner = range(num_t - 1, -1, -1)
+        if show_progress:
+            inner = tqdm(
+                inner,
+                desc="t-diag reverse",
+                unit="t",
+                leave=False,
+                dynamic_ncols=True,
+                mininterval=0.5,
+            )
         for t in inner:
             t_batch = torch.full((take,), t, device=device, dtype=torch.long)
             eps_a = model_a.predict_noise(x_a, t_batch, z_lr_a)

@@ -86,15 +86,27 @@ def evaluate_sr(
     next_index = int(start_index)
     grid_lr = grid_pred = grid_hr = grid_bicubic = grid_soft = None
 
-    iterator = tqdm(loader, desc="evaluate", leave=False) if show_progress else loader
+    pbar = (
+        tqdm(
+            total=remaining,
+            desc="evaluate-sr",
+            unit="img",
+            leave=True,
+            dynamic_ncols=True,
+        )
+        if show_progress
+        else None
+    )
     dataset = loader.dataset
-    for lr, hr in iterator:
+    for lr, hr in loader:
         if remaining <= 0:
             break
         take = min(lr.shape[0], remaining)
         lr = lr[:take].to(device)
         hr = hr[:take].to(device)
         indices = list(range(next_index, next_index + take))
+        if pbar is not None:
+            pbar.set_postfix(idx=f"{indices[0]}-{indices[-1]}", refresh=False)
 
         bicubic = upsample_bicubic(lr, hr_size)
         z_hr = encode_scaled(vae, hr, latent_scale=latent_scale)
@@ -113,7 +125,7 @@ def evaluate_sr(
             z_lr_cond,
             val_indices=indices,
             noise_seed=noise_seed,
-            show_progress=False,
+            show_progress=show_progress,
         )
         pred = decode_scaled(vae, z_sr, latent_scale=latent_scale).clamp(0.0, 1.0)
         soft = decode_scaled(vae, z_lr_raw, latent_scale=latent_scale).clamp(0.0, 1.0)
@@ -155,6 +167,11 @@ def evaluate_sr(
 
         remaining -= take
         next_index += take
+        if pbar is not None:
+            pbar.update(take)
+
+    if pbar is not None:
+        pbar.close()
 
     summary: dict[str, dict[str, dict[str, float]]] = {}
     for method, metric_map in scores.items():
