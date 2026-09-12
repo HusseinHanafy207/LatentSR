@@ -1,20 +1,3 @@
-"""Diagnostic 2 CLI: Deterministic DDIM (eta=0) vs Ancestral DDPM (eta=1).
-
-Evaluates the existing Q2 checkpoint (no retraining):
-    - DDPM: Stochastic ancestral sampler (eta=1.0)
-    - DDIM: Deterministic probability-flow ODE sampler (eta=0.0)
-
-Using the EXACT SAME initial noise x_T and validation images.
-Compares: PSNR, LPIPS, SSIM, cos_peak, cos_{t=0}, collapse score.
-
-Evaluates the Fork Decision:
-    - If DDIM substantially reduces late collapse:
-      Sampling stochasticity is a major part of the problem.
-    - If the same collapse remains under DDIM:
-      The learned denoising objective / score function parameterization
-      is the stronger suspect.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -22,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from latentsr.datasets.sr_pairs import get_sr_pair_dataloaders
+from latentsr.datasets.sr_pairs import get_sr_pair_val_dataloader
 from latentsr.metrics.ddim_diagnostic import (
     format_ddpm_vs_ddim_table,
     run_ddpm_vs_ddim_comparison,
@@ -173,14 +156,14 @@ def main() -> None:
     print("Zero retraining. Identical x_T noise and validation images for both samplers.")
     print("=" * 80)
 
-    _, val_loader = get_sr_pair_dataloaders(
+    val_loader = get_sr_pair_val_dataloader(
+        batch_size=batch_size,
         data_dir=data_dir,
         hr_size=hr_size,
         lr_size=lr_size,
-        batch_size=batch_size,
         num_workers=int(config.get("num_workers", 2)),
+        pin_memory=bool(config.get("pin_memory", False)),
         download=args.download,
-        seed=seed,
     )
 
     result = run_ddpm_vs_ddim_comparison(

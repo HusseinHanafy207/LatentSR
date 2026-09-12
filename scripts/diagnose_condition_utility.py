@@ -1,16 +1,3 @@
-"""Diagnostic 1 CLI: Measure Condition Utility as a function of diffusion timestep.
-
-Compares:
-    epsilon_theta(z_t, z_lr^true, t)  vs  epsilon_theta(z_t, z_lr^shuffled, t)
-
-Evaluates difference in epsilon-MSE and in predicted z0_hat across timesteps
-t = {999, 800, 650, 500, 300, 100, 0}.
-
-Hypothesis:
-    Utility will be strong at noisy/mid timesteps and fall toward t=0,
-    because at low noise z_t itself already reveals z_hr strongly.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -18,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from latentsr.datasets.sr_pairs import get_sr_pair_dataloaders
+from latentsr.datasets.sr_pairs import get_sr_pair_val_dataloader
 from latentsr.metrics.condition_utility import (
     DEFAULT_MILESTONES,
     evaluate_condition_utility_forward,
@@ -205,15 +192,15 @@ def main() -> None:
     print(f"Images: {num_images} (batch size {batch_size}) | Device: {device}")
     print("=" * 80)
 
-    # Dataloader
-    _, val_loader = get_sr_pair_dataloaders(
+    # Dataloader (val-only skips building CelebA train partition)
+    val_loader = get_sr_pair_val_dataloader(
+        batch_size=batch_size,
         data_dir=data_dir,
         hr_size=hr_size,
         lr_size=lr_size,
-        batch_size=batch_size,
         num_workers=int(config.get("num_workers", 2)),
+        pin_memory=bool(config.get("pin_memory", False)),
         download=args.download,
-        seed=seed,
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)

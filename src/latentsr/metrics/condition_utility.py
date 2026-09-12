@@ -1,21 +1,4 @@
-"""Diagnostic 1: Condition Utility as a function of diffusion timestep.
-
-Evaluates:
-    epsilon_theta(z_t, z_lr^true, t)  vs  epsilon_theta(z_t, z_lr^shuffled, t)
-
-where z_lr^shuffled comes from another image in the batch (derangement via roll).
-
-Measures across timesteps (e.g. t in {999, 800, 650, 500, 300, 100, 0}):
-    1. epsilon-MSE and epsilon-RMSE: ||eps_true - eps_shuf||^2
-    2. z0_hat-MSE and z0_hat-RMSE: ||z0_hat_true - z0_hat_shuf||^2
-    3. Prediction Cosine: cos(z0_hat_true, z0_hat_shuf)
-    4. Condition Specificity Gap: cos(z0_hat_true, z_lr^true) - cos(z0_hat_shuf, z_lr^true)
-    5. Ground-Truth Advantage (when z_hr is available):
-       ||z0_hat_shuf - z_hr||^2 - ||z0_hat_true - z_hr||^2
-
-Directly tests the hypothesis:
-    Condition utility is strong at noisy/mid timesteps and drops toward t=0,
-    demonstrating whether the model ignores the LR condition near t=0.
+"""Condition Utility as a function of diffusion timestep.
 """
 
 from __future__ import annotations
