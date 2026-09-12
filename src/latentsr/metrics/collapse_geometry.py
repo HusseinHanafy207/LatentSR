@@ -22,6 +22,7 @@ from latentsr.super_resolution.condition import ConditionalLatentDDPM
 from latentsr.super_resolution.inference import encode_lr_latents
 from latentsr.super_resolution.sample import (
     _STEP_SALT,
+    ddim_step,
     predict_x0_from_eps,
     seeded_noise_like,
 )
@@ -249,6 +250,8 @@ def reverse_cosine_curves(
     compute_lpips: bool = True,
     lpips_fn: LPIPSMetric | None = None,
     whitener: ChannelWhitening | None = None,
+    sampler: str = "ddpm",
+    ddim_eta: float = 0.0,
 ) -> dict[str, Any]:
     """Run the reverse chain; return cos curves, z_lr_cond, and optional PSNR/LPIPS.
 
@@ -258,6 +261,9 @@ def reverse_cosine_curves(
     Cosine is vs the condition the model sees (whitened if ``whitener`` is set).
     Soft-decode is never done here; image metrics decode the final sample ``x``.
     """
+    sampler = sampler.lower().strip()
+    if sampler not in ("ddpm", "ddim"):
+        raise ValueError(f"Unknown sampler '{sampler}', expected 'ddpm' or 'ddim'")
     model.eval()
     vae.eval()
     model.to(device)
@@ -307,9 +313,10 @@ def reverse_cosine_curves(
 
         steps = range(num_t - 1, -1, -1)
         if show_progress:
+            desc = "reverse t (ddim)" if sampler == "ddim" else "reverse t (ddpm)"
             steps = tqdm(
                 steps,
-                desc="reverse t",
+                desc=desc,
                 unit="t",
                 leave=False,
                 dynamic_ncols=True,
@@ -320,13 +327,31 @@ def reverse_cosine_curves(
             eps = model.predict_noise(x, t_batch, z_lr)
             z0 = predict_x0_from_eps(model.scheduler, x, t_batch, eps)
             cos_hist[:, t] = latent_cosine(z0, z_lr).detach().cpu()
-            step_noise = seeded_noise_like(
-                x,
-                batch_idx,
-                base_seed=noise_seed,
-                salt=_STEP_SALT * (int(t) + 1),
-            )
-            x = model.scheduler.p_sample_step(x, t_batch, eps, noise=step_noise)
+            if sampler == "ddim":
+                step_noise = None
+                if ddim_eta > 0.0:
+                    step_noise = seeded_noise_like(
+                        x,
+                        batch_idx,
+                        base_seed=noise_seed,
+                        salt=_STEP_SALT * (int(t) + 1),
+                    )
+                x = ddim_step(
+                    model.scheduler,
+                    x,
+                    t_batch,
+                    eps,
+                    eta=ddim_eta,
+                    noise=step_noise,
+                )
+            else:
+                step_noise = seeded_noise_like(
+                    x,
+                    batch_idx,
+                    base_seed=noise_seed,
+                    salt=_STEP_SALT * (int(t) + 1),
+                )
+                x = model.scheduler.p_sample_step(x, t_batch, eps, noise=step_noise)
 
         cos_chunks.append(cos_hist)
         z_chunks.append(z_lr.cpu())
@@ -355,6 +380,8 @@ def reverse_cosine_curves(
         "cos": torch.cat(cos_chunks, dim=0),
         "indices": indices,
         "z_lr": torch.cat(z_chunks, dim=0),
+        "sampler": sampler,
+        "ddim_eta": float(ddim_eta),
     }
     if psnr_chunks:
         out["psnr"] = torch.cat(psnr_chunks, dim=0)

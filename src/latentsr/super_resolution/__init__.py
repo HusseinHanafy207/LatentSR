@@ -24,6 +24,7 @@ from latentsr.super_resolution.guidance import (
     sample_guided_latents,
 )
 from latentsr.super_resolution.sample import (
+    ddim_step,
     image_noise_seed,
     predict_x0_from_eps,
     sample_conditional_latents,
@@ -47,6 +48,7 @@ __all__ = [
     "load_conditioned_latent_ddpm_checkpoint",
     "load_sr_components",
     "prepare_lr_batch",
+    "ddim_step",
     "image_noise_seed",
     "predict_x0_from_eps",
     "sample_conditional_latents",

@@ -62,6 +62,8 @@ def evaluate_sr(
     noise_seed: int = 42,
     start_index: int = 0,
     whitener: ChannelWhitening | None = None,
+    sampler: str = "ddpm",
+    ddim_eta: float = 0.0,
 ) -> dict[str, Any]:
     """Evaluate bicubic + soft decode vs LatentSR on a val loader.
 
@@ -126,6 +128,8 @@ def evaluate_sr(
             val_indices=indices,
             noise_seed=noise_seed,
             show_progress=show_progress,
+            sampler=sampler,
+            ddim_eta=ddim_eta,
         )
         pred = decode_scaled(vae, z_sr, latent_scale=latent_scale).clamp(0.0, 1.0)
         soft = decode_scaled(vae, z_lr_raw, latent_scale=latent_scale).clamp(0.0, 1.0)
@@ -186,6 +190,8 @@ def evaluate_sr(
         "per_image": per_image_rows,
         "noise_seed": int(noise_seed),
         "start_index": int(start_index),
+        "sampler": sampler,
+        "ddim_eta": float(ddim_eta),
     }
 
     if output_dir is not None and grid_lr is not None:
