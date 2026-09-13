@@ -37,6 +37,13 @@ def parse_args() -> argparse.Namespace:
         help="Override frozen VAE path from the config.",
     )
     parser.add_argument(
+        "--prediction-type",
+        type=str,
+        choices=["eps", "epsilon", "x0", "x_0", "z0"],
+        default=None,
+        help="Override prediction_type from config: 'eps' (default) or 'x0'.",
+    )
+    parser.add_argument(
         "--download",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -70,6 +77,8 @@ def main() -> None:
         config["batch_size"] = args.batch_size
     if args.vae_checkpoint is not None:
         config["vae_checkpoint"] = str(args.vae_checkpoint)
+    if args.prediction_type is not None:
+        config["prediction_type"] = args.prediction_type
 
     if args.resume is None and config.get("seed") is not None:
         torch.manual_seed(int(config["seed"]))
@@ -102,8 +111,21 @@ def main() -> None:
     n_params = sum(p.numel() for p in model.parameters())
     print(
         f"condition_type={config.get('condition_type', 'concat')}  "
+        f"prediction_type={model.prediction_type}  "
         f"params={n_params / 1e6:.2f}M"
     )
+    if model.prediction_type == "x0":
+        print(
+            "x0-prediction: UNet outputs z0_hat; converted to eps via "
+            "(z_t - sqrt(ab)*z0_hat)/sqrt(1-ab); loss remains ||eps_hat - eps||^2."
+        )
+    hf_repo = config.get("hf_checkpoint_repo")
+    if hf_repo:
+        print(
+            f"HF backup enabled → {hf_repo}/{config.get('hf_checkpoint_subdir', '')}\n"
+            "  Ensure you are logged in (Kaggle: secret HF_TOKEN + "
+            "huggingface_hub.login). Checkpoints + train/val CSV logs upload each epoch."
+        )
     optimizer = torch.optim.Adam(model.parameters(), lr=float(config["learning_rate"]))
     criterion = DDPMLoss()
 

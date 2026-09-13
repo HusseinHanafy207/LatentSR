@@ -3,7 +3,13 @@
 Concat layout (Phase 8):
 
     [noisy_z_hr | z_lr]  →  in_channels = 2 * C_z
-    UNet → predicted noise ε̂  (out_channels = C_z)
+    UNet → predicted noise ε̂ **or** clean latent ẑ0  (out_channels = C_z)
+
+Set ``prediction_type`` in the YAML:
+    - ``eps`` (default): UNet outputs ε̂; loss is ||ε̂ − ε||²
+    - ``x0``: UNet outputs ẑ0; convert to ε̂ via
+          ε̂ = (z_t − √ᾱ_t ẑ0) / √(1−ᾱ_t)
+      and retain the same ||ε̂ − ε||² loss (SNR-matched to x0 MSE).
 
 AdaGN / FiLM (Q2 follow-up): ``x_t`` stays ``C_z`` channels; ``z_lr`` modulates
 features at every UNet scale. Set ``condition_type: adagn`` in the config.
@@ -20,6 +26,11 @@ from generative_models.ddpm import NoiseScheduler, UNet
 from generative_models.ddpm.forward import forward_diffuse
 
 from latentsr.super_resolution.adagn import build_adagn_unet_from_config
+from latentsr.super_resolution.parameterization import (
+    normalize_prediction_type,
+    predict_eps_from_x0,
+    predict_x0_from_eps,
+)
 
 
 class ConditionedLatentUNet(nn.Module):
@@ -61,7 +72,13 @@ class ConditionedLatentUNet(nn.Module):
 
 
 class ConditionalLatentDDPM(nn.Module):
-    """ε-prediction DDPM on ``z_hr``, conditioned on ``z_lr``."""
+    """Conditional latent DDPM on ``z_hr``, conditioned on ``z_lr``.
+
+    The UNet may be parameterized as ε-prediction or x0-prediction. In both
+    cases ``predict_noise`` returns ε̂ so the existing DDPM/DDIM samplers and
+    ``DDPMLoss(||ε̂ − ε||²)`` stay unchanged. Only the function the network
+    itself represents changes.
+    """
 
     def __init__(
         self,
@@ -71,6 +88,7 @@ class ConditionalLatentDDPM(nn.Module):
         num_timesteps: int = 1000,
         beta_start: float = 1e-4,
         beta_end: float = 0.02,
+        prediction_type: str = "eps",
     ) -> None:
         super().__init__()
         self.unet = unet
@@ -79,15 +97,40 @@ class ConditionalLatentDDPM(nn.Module):
             beta_start=beta_start,
             beta_end=beta_end,
         )
+        self.prediction_type = normalize_prediction_type(prediction_type)
 
     @property
     def num_timesteps(self) -> int:
         return self.scheduler.num_timesteps
 
+    def predict_raw(
+        self, x_t: torch.Tensor, t: torch.Tensor, z_lr: torch.Tensor
+    ) -> torch.Tensor:
+        """Raw UNet output (ε̂ if ``prediction_type='eps'``, ẑ0 if ``'x0'``)."""
+        return self.unet(x_t, t, z_lr)
+
     def predict_noise(
         self, x_t: torch.Tensor, t: torch.Tensor, z_lr: torch.Tensor
     ) -> torch.Tensor:
-        return self.unet(x_t, t, z_lr)
+        """Always returns ε̂ for loss / reverse sampling.
+
+        When ``prediction_type == 'x0'``, converts the UNet's ẑ0 via
+
+            ε̂ = (x_t − √ᾱ_t ẑ0) / √(1−ᾱ_t)
+        """
+        raw = self.predict_raw(x_t, t, z_lr)
+        if self.prediction_type == "eps":
+            return raw
+        return predict_eps_from_x0(self.scheduler, x_t, t, raw)
+
+    def predict_x0(
+        self, x_t: torch.Tensor, t: torch.Tensor, z_lr: torch.Tensor
+    ) -> torch.Tensor:
+        """Always returns ẑ0 (direct UNet output or converted from ε̂)."""
+        raw = self.predict_raw(x_t, t, z_lr)
+        if self.prediction_type == "x0":
+            return raw
+        return predict_x0_from_eps(self.scheduler, x_t, t, raw)
 
     def forward(
         self,
@@ -96,6 +139,10 @@ class ConditionalLatentDDPM(nn.Module):
         t: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward diffuse + predict ε̂ (converted from x0 when needed).
+
+        Returns ``(noise_pred, noise, t)`` for ``DDPMLoss(noise_pred, noise)``.
+        """
         x_t, t, noise = forward_diffuse(self.scheduler, z_hr, t=t, noise=noise)
         noise_pred = self.predict_noise(x_t, t, z_lr)
         return noise_pred, noise, t
@@ -131,6 +178,7 @@ def build_conditioned_latent_ddpm_from_config(
         num_timesteps=int(config.get("num_timesteps", 1000)),
         beta_start=float(config.get("beta_start", 1e-4)),
         beta_end=float(config.get("beta_end", 0.02)),
+        prediction_type=str(config.get("prediction_type", "eps")),
     )
 
 
@@ -139,12 +187,20 @@ def load_conditioned_latent_ddpm_checkpoint(
     *,
     map_location: str | torch.device = "cpu",
 ) -> tuple[ConditionalLatentDDPM, dict[str, Any]]:
-    """Load a Phase-8 checkpoint; returns ``(model, checkpoint_dict)``."""
+    """Load a Phase-8 checkpoint; returns ``(model, checkpoint_dict)``.
+
+    Reads ``prediction_type`` from ``checkpoint['config']`` (defaults to ``eps``
+    for older checkpoints).
+    """
     path = Path(path)
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
     config = checkpoint.get("config")
     if not isinstance(config, dict):
         raise ValueError(f"Checkpoint missing config dict: {path}")
+    # Older checkpoints omit prediction_type → eps (backward compatible).
+    if "prediction_type" not in config and "prediction_type" in checkpoint:
+        config = dict(config)
+        config["prediction_type"] = checkpoint["prediction_type"]
     model = build_conditioned_latent_ddpm_from_config(config)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()

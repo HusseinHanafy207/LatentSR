@@ -79,6 +79,11 @@ def load_sr_components(
         "lr_size": int(config.get("lr_size", 32)),
         "zlr_whiten_path": str(whiten_resolved) if whiten_resolved else None,
         "whitener": whitener,
+        "prediction_type": getattr(
+            model,
+            "prediction_type",
+            config.get("prediction_type", checkpoint.get("prediction_type", "eps")),
+        ),
     }
     return model, vae, meta
 

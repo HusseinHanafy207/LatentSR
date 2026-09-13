@@ -10,6 +10,10 @@ from tqdm.auto import tqdm
 from generative_models.ddpm import NoiseScheduler
 
 from latentsr.super_resolution.condition import ConditionalLatentDDPM
+from latentsr.super_resolution.parameterization import (
+    predict_eps_from_x0,
+    predict_x0_from_eps,
+)
 from latentsr.vae.latent import decode_scaled
 from latentsr.vae.vae import VAE
 
@@ -53,27 +57,6 @@ def seeded_noise_like(
     return torch.stack(chunks, dim=0).to(device=reference.device, dtype=reference.dtype)
 
 
-def predict_x0_from_eps(
-    scheduler: NoiseScheduler,
-    x_t: torch.Tensor,
-    t: torch.Tensor,
-    eps_hat: torch.Tensor,
-) -> torch.Tensor:
-    """Closed-form ε-prediction x0 (no clamp; latents are unbounded).
-
-        ẑ0 = (x_t − √(1−ᾱ_t) ε̂) / √ᾱ_t
-    """
-    if eps_hat.shape != x_t.shape:
-        raise ValueError(
-            f"eps_hat shape {tuple(eps_hat.shape)} must match x_t {tuple(x_t.shape)}"
-        )
-    sqrt_ab = scheduler._extract(scheduler.sqrt_alphas_cumprod, t, x_t.shape)
-    sqrt_omb = scheduler._extract(
-        scheduler.sqrt_one_minus_alphas_cumprod, t, x_t.shape
-    )
-    return (x_t - sqrt_omb * eps_hat) / sqrt_ab
-
-
 def ddim_step(
     scheduler: NoiseScheduler,
     x_t: torch.Tensor,
@@ -83,23 +66,6 @@ def ddim_step(
     eta: float = 0.0,
     noise: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """One reverse step using DDIM (Song et al., 2020).
-
-    When ``eta == 0.0`` (default), the sampling trajectory is completely
-    deterministic (Euler-like integration along the probability flow ODE).
-    When ``eta == 1.0``, the variance matches the DDPM posterior variance.
-
-    At timestep t=0, ``x_{t-1} = x_{-1} = x_0_pred``, exactly reaching
-    the clean prediction.
-
-    Args:
-        scheduler: NoiseScheduler instance with precomputed cumprod schedules.
-        x_t: Current noisy latents at timestep t, shape ``(B, C, H, W)``.
-        t: Integer timesteps per batch element, shape ``(B,)``.
-        noise_pred: Predicted noise epsilon_theta(x_t, t, cond), shape ``(B, C, H, W)``.
-        eta: DDIM stochasticity multiplier in [0, 1]. 0.0 is deterministic DDIM.
-        noise: Optional random Gaussian noise tensor for eta > 0.
-    """
     if noise_pred.shape != x_t.shape:
         raise ValueError(
             f"noise_pred shape {tuple(noise_pred.shape)} must match "
@@ -160,18 +126,7 @@ def sample_conditional_latents(
     sampler: str = "ddpm",
     ddim_eta: float = 0.0,
 ) -> torch.Tensor:
-    """Denoise from noise to ``z_hr``, conditioned on ``z_lr`` (no clamping).
-
-    Args:
-        model: ConditionalLatentDDPM.
-        z_lr: Conditioning latents, shape ``(B, C, H, W)``.
-        noise: Optional initial noise x_T. Drawn via ``seeded_noise_like`` or randn.
-        val_indices: Per-image index for deterministic noise.
-        noise_seed: Base seed for reproducible noise generation.
-        show_progress: Display tqdm progress bar over timesteps.
-        sampler: "ddpm" (stochastic ancestral) or "ddim" (deterministic ODE if ddim_eta=0).
-        ddim_eta: DDIM stochasticity parameter (0.0 = deterministic ODE).
-    """
+   
     sampler = sampler.lower().strip()
     if sampler not in ("ddpm", "ddim"):
         raise ValueError(f"Unknown sampler '{sampler}', expected 'ddpm' or 'ddim'")

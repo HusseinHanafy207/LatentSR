@@ -26,10 +26,14 @@ from latentsr.super_resolution.guidance import (
 from latentsr.super_resolution.sample import (
     ddim_step,
     image_noise_seed,
+    predict_eps_from_x0,
     predict_x0_from_eps,
     sample_conditional_latents,
     sample_sr_images,
     seeded_noise_like,
+)
+from latentsr.super_resolution.parameterization import (
+    normalize_prediction_type,
 )
 from latentsr.super_resolution.trainer import LatentSRTrainer
 
@@ -47,9 +51,11 @@ __all__ = [
     "encode_lr_latents",
     "load_conditioned_latent_ddpm_checkpoint",
     "load_sr_components",
+    "normalize_prediction_type",
     "prepare_lr_batch",
     "ddim_step",
     "image_noise_seed",
+    "predict_eps_from_x0",
     "predict_x0_from_eps",
     "sample_conditional_latents",
     "sample_guided_latents",

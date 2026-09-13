@@ -88,7 +88,14 @@ class LatentSRTrainer:
         with path.open("a", newline="", encoding="utf-8") as f:
             csv.DictWriter(f, fieldnames=fieldnames).writerow(row)
 
-    def _run_epoch(self, loader: DataLoader, training: bool) -> dict[str, float]:
+    def _run_epoch(
+        self,
+        loader: DataLoader,
+        training: bool,
+        *,
+        epoch: int | None = None,
+        epochs: int | None = None,
+    ) -> dict[str, float]:
         self.model.train(mode=training)
         total_loss = 0.0
         num_batches = 0
@@ -97,7 +104,20 @@ class LatentSRTrainer:
 
         context = torch.enable_grad() if training else torch.no_grad()
         phase = "train" if training else "val"
-        progress = tqdm(loader, desc=phase, leave=False, dynamic_ncols=True)
+        if epoch is not None and epochs is not None:
+            desc = f"{phase} {epoch}/{epochs}"
+        elif epoch is not None:
+            desc = f"{phase} ep{epoch}"
+        else:
+            desc = phase
+        progress = tqdm(
+            loader,
+            desc=desc,
+            leave=True,
+            dynamic_ncols=True,
+            unit="batch",
+            mininterval=0.5,
+        )
 
         with context:
             for batch in progress:
@@ -123,8 +143,12 @@ class LatentSRTrainer:
                 last_batch_loss = batch_loss
                 total_loss += batch_loss
                 num_batches += 1
-                if num_batches % 10 == 0 or num_batches == 1:
-                    progress.set_postfix(loss=f"{batch_loss:.4f}")
+                avg_loss = total_loss / num_batches
+                progress.set_postfix(
+                    loss=f"{batch_loss:.4f}",
+                    avg=f"{avg_loss:.4f}",
+                    refresh=False,
+                )
 
         metrics = {"loss": total_loss / max(num_batches, 1)}
         if training:
@@ -132,18 +156,26 @@ class LatentSRTrainer:
             metrics["last_batch_loss"] = last_batch_loss or 0.0
         return metrics
 
-    def train_epoch(self) -> dict[str, float]:
+    def train_epoch(
+        self, *, epoch: int | None = None, epochs: int | None = None
+    ) -> dict[str, float]:
         start = time.time()
-        metrics = self._run_epoch(self.train_loader, training=True)
+        metrics = self._run_epoch(
+            self.train_loader, training=True, epoch=epoch, epochs=epochs
+        )
         metrics["lr"] = self.optimizer.param_groups[0]["lr"]
         metrics["epoch_time"] = time.time() - start
         return metrics
 
-    def validate(self) -> dict[str, float] | None:
+    def validate(
+        self, *, epoch: int | None = None, epochs: int | None = None
+    ) -> dict[str, float] | None:
         if self.val_loader is None:
             return None
         start = time.time()
-        metrics = self._run_epoch(self.val_loader, training=False)
+        metrics = self._run_epoch(
+            self.val_loader, training=False, epoch=epoch, epochs=epochs
+        )
         metrics["epoch_time"] = time.time() - start
         return metrics
 
@@ -163,6 +195,10 @@ class LatentSRTrainer:
             "vae_checkpoint": self.config.get("vae_checkpoint"),
             "latent_scale": self.config.get("latent_scale", 1.0),
             "zlr_whiten_path": self.config.get("zlr_whiten_path"),
+            "prediction_type": self.config.get(
+                "prediction_type",
+                getattr(self.model, "prediction_type", "eps"),
+            ),
         }
         latest_path = self.checkpoint_dir / "latest.pt"
         torch.save(checkpoint, latest_path)
@@ -191,16 +227,36 @@ class LatentSRTrainer:
         subdir = str(self.config.get("hf_checkpoint_subdir", "")).strip("/")
         return f"{subdir}/{name}" if subdir else name
 
+    def _dump_run_config(self) -> Path:
+        """Write a JSON snapshot of the train config into log_dir (uploaded to HF)."""
+        import json
+
+        path = self.log_dir / "run_config.json"
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(self.config, f, indent=2, default=str)
+        return path
+
     def _persist_remote(self, *, epoch: int, sample_path: Path | None = None) -> None:
         hf_repo = self.config.get("hf_checkpoint_repo")
         if not hf_repo:
             return
+        upload_every = int(self.config.get("hf_upload_every", 1))
+        if upload_every > 1 and epoch % upload_every != 0 and epoch != int(
+            self.config.get("epochs", epoch)
+        ):
+            print(
+                f"Skipping HF upload this epoch "
+                f"(hf_upload_every={upload_every}; will upload on schedule / final)."
+            )
+            return
         latest_path = self.checkpoint_dir / "latest.pt"
+        config_path = self._dump_run_config()
         self._upload_hf_checkpoint(
             latest_path,
             epoch=epoch,
             repo_id=str(hf_repo),
             sample_path=sample_path,
+            config_path=config_path,
         )
 
     def _upload_hf_checkpoint(
@@ -210,6 +266,7 @@ class LatentSRTrainer:
         epoch: int,
         repo_id: str,
         sample_path: Path | None = None,
+        config_path: Path | None = None,
     ) -> None:
         try:
             from huggingface_hub import HfApi
@@ -227,18 +284,39 @@ class LatentSRTrainer:
             ]
             if self.train_metrics_path.exists():
                 uploads.append(
-                    (self.train_metrics_path, self._hf_remote_path("logs/train_metrics.csv"))
+                    (
+                        self.train_metrics_path,
+                        self._hf_remote_path("logs/train_metrics.csv"),
+                    )
                 )
             if self.val_metrics_path.exists():
                 uploads.append(
-                    (self.val_metrics_path, self._hf_remote_path("logs/val_metrics.csv"))
+                    (
+                        self.val_metrics_path,
+                        self._hf_remote_path("logs/val_metrics.csv"),
+                    )
+                )
+            if config_path is not None and Path(config_path).exists():
+                uploads.append(
+                    (Path(config_path), self._hf_remote_path("logs/run_config.json"))
                 )
             if sample_path is not None and Path(sample_path).exists():
                 sample_path = Path(sample_path)
                 uploads.append(
                     (sample_path, self._hf_remote_path(f"samples/{sample_path.name}"))
                 )
-            for local_path, remote_name in uploads:
+
+            print(
+                f"Uploading {len(uploads)} file(s) to Hugging Face "
+                f"(epoch {epoch})…"
+            )
+            for local_path, remote_name in tqdm(
+                uploads,
+                desc=f"HF upload ep{epoch}",
+                unit="file",
+                leave=True,
+                dynamic_ncols=True,
+            ):
                 api.upload_file(
                     path_or_fileobj=str(local_path),
                     path_in_repo=remote_name,
@@ -248,9 +326,15 @@ class LatentSRTrainer:
                 print(f"  HF uploaded {remote_name}")
             prefix = str(self.config.get("hf_checkpoint_subdir", "")).strip("/")
             dest = f"hf://{repo_id}/{prefix}/" if prefix else f"hf://{repo_id}/"
-            print(f"HF backup complete for epoch {epoch} → {dest} ({len(uploads)} files)")
+            print(
+                f"HF backup complete for epoch {epoch} → {dest} ({len(uploads)} files)"
+            )
         except Exception as exc:  # noqa: BLE001 — never crash training on backup failure
             print(f"WARNING: Hugging Face checkpoint upload failed: {exc}")
+            print(
+                "  Tip: on Kaggle, set secret HF_TOKEN with write access and run "
+                "`huggingface_hub.login(token=HF_TOKEN)` before training."
+            )
 
     def load_checkpoint(self, checkpoint_path: str | Path) -> dict[str, Any]:
         checkpoint = torch.load(
@@ -354,22 +438,43 @@ class LatentSRTrainer:
         print(
             f"VAE: {self.config.get('vae_checkpoint')}  |  "
             f"latent_scale: {self.config.get('latent_scale', 1.0)}  |  "
-            f"condition: {self.config.get('condition_type', 'concat')}"
+            f"condition: {self.config.get('condition_type', 'concat')}  |  "
+            f"prediction_type: {self.config.get('prediction_type', getattr(self.model, 'prediction_type', 'eps'))}"
         )
         hf_repo = self.config.get("hf_checkpoint_repo")
         hf_subdir = str(self.config.get("hf_checkpoint_subdir", "")).strip("/")
         if hf_repo:
             dest = f"hf://{hf_repo}/{hf_subdir}/" if hf_subdir else f"hf://{hf_repo}/"
-            print(f"HF backup every epoch → {dest}")
+            print(
+                f"HF backup every epoch → {dest}\n"
+                f"  (uploads latest.pt, checkpoint_epoch_XXX.pt, "
+                f"logs/train_metrics.csv, logs/val_metrics.csv, logs/run_config.json)"
+            )
+        elif hf_subdir:
+            print(
+                "WARNING: hf_checkpoint_subdir is set but hf_checkpoint_repo is not; "
+                "no remote backup will run."
+            )
         print()
 
-        for epoch in range(start_epoch + 1, epochs + 1):
+        epoch_range = range(start_epoch + 1, epochs + 1)
+        epoch_bar = tqdm(
+            epoch_range,
+            desc="epochs",
+            unit="epoch",
+            leave=True,
+            dynamic_ncols=True,
+            total=len(epoch_range),
+        )
+        for epoch in epoch_bar:
             self.current_epoch = epoch
-            train_metrics = self.train_epoch()
+            train_metrics = self.train_epoch(epoch=epoch, epochs=epochs)
             run_val = self.val_loader is not None and (
                 epoch == 1 or epoch == epochs or epoch % validate_every == 0
             )
-            val_metrics = self.validate() if run_val else None
+            val_metrics = (
+                self.validate(epoch=epoch, epochs=epochs) if run_val else None
+            )
             self._print_metrics(epoch, train_metrics, val_metrics)
             self._log_metrics(epoch, train_metrics, val_metrics)
 
@@ -388,4 +493,9 @@ class LatentSRTrainer:
                 if sample_path is not None:
                     print(f"Saved comparison grid to {sample_path}")
             self._persist_remote(epoch=epoch, sample_path=sample_path)
+
+            postfix = {"train_loss": f"{train_metrics['loss']:.4f}"}
+            if val_metrics is not None:
+                postfix["val_loss"] = f"{val_metrics['loss']:.4f}"
+            epoch_bar.set_postfix(**postfix, refresh=True)
             print()

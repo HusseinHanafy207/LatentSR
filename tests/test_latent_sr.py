@@ -196,4 +196,5 @@ def test_latent_sr_hf_subdir_upload(tmp_path: Path, monkeypatch) -> None:
     assert "latent_sr_q2/latest.pt" in uploaded
     assert "latent_sr_q2/checkpoint_epoch_001.pt" in uploaded
     assert "latent_sr_q2/logs/train_metrics.csv" in uploaded
+    assert "latent_sr_q2/logs/run_config.json" in uploaded
     assert "latest.pt" not in uploaded
