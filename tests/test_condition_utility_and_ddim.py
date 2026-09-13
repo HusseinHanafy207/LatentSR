@@ -27,6 +27,13 @@ from latentsr.metrics.ddim_diagnostic import (
     save_ddpm_vs_ddim_grid,
     save_ddpm_vs_ddim_results,
 )
+from latentsr.metrics.condition_switch import (
+    ALWAYS_TRUE_KEY,
+    format_condition_switch_table,
+    generate_condition_switch_report,
+    run_condition_switch_rollout,
+    save_condition_switch_results,
+)
 from latentsr.super_resolution.condition import build_conditioned_latent_ddpm_from_config
 from latentsr.super_resolution.sample import (
     ddim_step,
@@ -277,3 +284,86 @@ def test_ddpm_vs_ddim_pipeline(tmp_path: Path) -> None:
     assert saved["report"].is_file()
     assert saved["trajectories_plot"].is_file()
     assert saved["compare_grid"].is_file()
+
+
+def test_condition_switch_rollout_pipeline(tmp_path: Path) -> None:
+    model, cfg = _tiny_sr_model()
+    vae = _tiny_vae()
+    device = torch.device("cpu")
+    # Tiny model has T=5, so use switch times inside [0, 4]
+    switch_times = (3, 1)
+
+    lr = torch.rand(4, 3, 32, 32)
+    hr = torch.rand(4, 3, 64, 64)
+    loader = DataLoader(TensorDataset(lr, hr), batch_size=2)
+
+    result = run_condition_switch_rollout(
+        model,
+        vae,
+        loader,
+        device=device,
+        num_images=4,
+        hr_size=64,
+        latent_scale=1.0,
+        noise_seed=42,
+        switch_times=switch_times,
+        sampler="ddpm",
+        compute_lpips=False,
+        show_progress=False,
+        grid_images=2,
+    )
+
+    assert result["num_images"] == 4
+    assert ALWAYS_TRUE_KEY in result["summary"]
+    assert "tau_3" in result["summary"]
+    assert "tau_1" in result["summary"]
+    assert len(result["delta_summary"]) == 2
+    assert len(result["per_image"]) == 4
+
+    # Per-image rows include deltas vs always_true
+    row0 = result["per_image"][0]
+    assert "tau_3_delta_psnr" in row0
+    assert "tau_1_delta_latent_mse_hr" in row0
+
+    table = format_condition_switch_table(result)
+    assert "always_true" in table
+    assert "3" in table
+
+    report = generate_condition_switch_report(result, model_name="TinyTest")
+    assert "CONDITION-SWITCH ROLLOUT" in report
+    assert "VERDICT" in report
+
+    saved = save_condition_switch_results(
+        result, tmp_path / "cond_switch", model_name="TinyTest"
+    )
+    assert saved["json"].is_file()
+    assert saved["by_tau_csv"].is_file()
+    assert saved["per_image_csv"].is_file()
+    assert saved["report"].is_file()
+    assert saved["plot"].is_file()
+    assert saved["grid"].is_file()
+
+
+def test_condition_switch_ddim_sampler() -> None:
+    model, cfg = _tiny_sr_model()
+    vae = _tiny_vae()
+    lr = torch.rand(2, 3, 32, 32)
+    hr = torch.rand(2, 3, 64, 64)
+    loader = DataLoader(TensorDataset(lr, hr), batch_size=2)
+
+    result = run_condition_switch_rollout(
+        model,
+        vae,
+        loader,
+        device=torch.device("cpu"),
+        num_images=2,
+        hr_size=64,
+        switch_times=(2,),
+        sampler="ddim",
+        ddim_eta=0.0,
+        compute_lpips=False,
+        show_progress=False,
+        grid_images=1,
+    )
+    assert result["sampler"] == "ddim"
+    assert "tau_2" in result["summary"]
